@@ -1,0 +1,9 @@
+[project]
+name = "cinerankml"
+version = "0.1.0"
+description = "Production-style movie recommender MLE platform"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["packages/common"]

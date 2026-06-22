@@ -4,6 +4,49 @@ This project is a production-style movie recommender MLE platform.
 
 The goal is to build the system in small vertical phases. Each phase should be implemented, tested, and committed before moving to the next phase.
 
+## Python tooling (`uv`)
+
+This project uses [uv](https://docs.astral.sh/uv/) for Python package management.
+
+### Layout
+
+* Root `pyproject.toml` defines a **uv workspace**.
+* `uv.lock` at the repo root pins exact dependency versions for the whole monorepo. **Commit `uv.lock`.**
+* `.python-version` pins the Python version (use **3.12+**).
+* `packages/common/` is the first workspace member and holds shared code (DB, config, logging, schemas).
+* Each deployable (`workers/*`, `jobs/*`, `apps/*`, `services/*`) gets its own `pyproject.toml` when that container is built. That file is the service's dependency list (the `uv` equivalent of a per-service `requirements.txt`).
+
+### How per-service dependencies work
+
+* `packages/common/pyproject.toml` — shared deps used across the repo (for example `sqlalchemy`, `pydantic`, `alembic`).
+* `workers/ratings-consumer/pyproject.toml` — only what that worker needs (for example `common` + Kafka client).
+* `jobs/train_cf/pyproject.toml` — only what that job needs (for example `common` + `torch` + `pandas`).
+
+Local development (install everything):
+
+```bash
+uv sync
+```
+
+Docker / CI (install one service only):
+
+```bash
+uv sync --frozen --package ratings-consumer --no-dev
+```
+
+Do **not** add a separate `requirements.txt` per service. Use workspace `pyproject.toml` files and the shared `uv.lock` instead.
+
+### When to add workspace members
+
+Add a new workspace member when a phase introduces a new deployable container. Do not create all `pyproject.toml` files upfront.
+
+| Phase | Workspace members to add |
+|-------|--------------------------|
+| 1 | `packages/common` |
+| 2 | Kafka workers |
+| 3 | `jobs/seed_catalog`, `jobs/tmdb_enrichment` |
+| 4+ | OpenSearch sync, remaining jobs, API, embedder service as each phase ships |
+
 ## Phase 1: Docker, Postgres, and Schemas
 
 Goal:
@@ -11,8 +54,13 @@ Set up local infrastructure and database schema.
 
 Build:
 
+* `uv` workspace bootstrap:
+  * Root `pyproject.toml` with `[tool.uv.workspace]`.
+  * `packages/common/pyproject.toml` as the shared installable package.
+  * `uv.lock` and `.python-version`.
+  * Phase 1 Python deps in `packages/common` (for example `sqlalchemy`, `alembic`, `psycopg`, `pydantic`).
 * Docker Compose for Postgres, Prometheus and Grafana.
-* Alembic setup.
+* Alembic setup under `packages/common/db`.
 * Initial database tables:
 
   * `catalog_movies`
@@ -28,6 +76,7 @@ Build:
 
 Acceptance criteria:
 
+* `uv sync` installs dependencies from the committed `uv.lock`.
 * `docker compose up` starts core infrastructure for db and monitoring.
 * Alembic migrations run successfully.
 * Tables are created with indexes and timestamps.
@@ -43,6 +92,7 @@ Build:
 * `workers/tags-producer`
 * `workers/ratings-consumer`
 * `workers/tags-consumer`
+* A `pyproject.toml` per worker (workspace members with Kafka-specific deps).
 * Shared Kafka utilities in `packages/common/kafka`
 
 Acceptance criteria:
@@ -62,6 +112,7 @@ Build:
 
 * `jobs/seed_catalog`
 * `jobs/tmdb_enrichment`
+* A `pyproject.toml` per job (workspace members).
 
 Acceptance criteria:
 

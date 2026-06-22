@@ -1,0 +1,14 @@
+global:
+  # How often Prometheus collects metrics from configured targets.
+  scrape_interval: 15s
+  # How often Prometheus evaluates alerting/recording rules.
+  evaluation_interval: 15s
+
+scrape_configs:
+  # A named scrape job for the Postgres exporter.
+  # The exporter exposes Postgres metrics in a Prometheus-readable format.
+  - job_name: postgres-exporter
+
+    # Static list of targets for this job.
+    static_configs:
+      - targets: ["postgres-exporter:9187"]

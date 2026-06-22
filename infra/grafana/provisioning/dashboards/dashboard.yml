@@ -1,0 +1,28 @@
+apiVersion: 1
+
+# Dashboard providers tell Grafana where to load dashboards from.
+providers: # This is the list of dashboard providers Grafana will automatically create when it starts.
+
+
+  - name: default       # Name of this dashboard provider.
+    orgId: 1            # In a default local Grafana setup, the main org is usually ID 1.
+    
+    # Grafana folder where these dashboards will appear.
+    # Empty string means dashboards appear in the general/default folder.
+    folder: ""
+
+    # Provider type.
+    # "file" means Grafana should load dashboards from JSON files on disk.
+    type: file
+
+    # If false, dashboards can be deleted from Grafana when removed from the source folder.
+    # If true, Grafana keeps dashboards even if the file disappears.
+    disableDeletion: false
+
+    # Whether dashboards loaded by this provider can be edited in the Grafana UI.
+    editable: true
+
+    # Configuration options for this provider.
+    # "path" tells Grafana where to find the JSON dashboard files.
+    options:
+      path: /var/lib/grafana/dashboards
