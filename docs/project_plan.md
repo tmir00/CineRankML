@@ -88,20 +88,140 @@ Stream MovieLens ratings and tags into Postgres.
 
 Build:
 
+* Kafka in root `docker-compose.yml` (KRaft broker; `ratings` and `tags` topics only).
 * `workers/ratings-producer`
 * `workers/tags-producer`
 * `workers/ratings-consumer`
 * `workers/tags-consumer`
 * A `pyproject.toml` per worker (workspace members with Kafka-specific deps).
 * Shared Kafka utilities in `packages/common/kafka`
+* Shared event schemas in `packages/common/schemas` (Pydantic models used by producers and consumers).
+* Prometheus scrape configs for worker metrics; Grafana dashboard panels for ingestion health and table counts.
+
+### Event schemas (`packages/common/schemas`)
+
+Use one shared base shape for ratings and tags events. Producers and consumers must share the same Pydantic models.
+
+**Base fields (every event):**
+
+```json
+{
+  "event_id": "018f5c2e-7e4a-7b3d-9e2f-9a2e7c8f4b11",
+  "event_type": "rating_created",
+  "stream_pipeline_version": "ratings-v1",
+  "source": "movielens",
+  "occurred_at": "2026-06-22T14:30:00Z",
+  "produced_at": "2026-06-22T14:30:02Z"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `event_id` | Unique ID for this event. Used for deduplication/idempotency. |
+| `event_type` | What happened, e.g. `rating_created`, `tag_created`. |
+| `stream_pipeline_version` | Version of the Kafka ingestion schema/pipeline. |
+| `source` | Where the event came from, e.g. `movielens`, `api`, `recommendation`. |
+| `occurred_at` | When the user action originally happened. |
+| `produced_at` | When the producer sent it to Kafka. |
+
+**Rating event example:**
+
+```json
+{
+  "event_id": "018f5c2e-7e4a-7b3d-9e2f-9a2e7c8f4b11",
+  "event_type": "rating_created",
+  "stream_pipeline_version": "ratings-v1",
+  "source": "api",
+  "occurred_at": "2026-06-22T14:30:00Z",
+  "produced_at": "2026-06-22T14:30:02Z",
+  "user_id": 123,
+  "movie_id": 50,
+  "rating": 4.5,
+  "rating_timestamp": "2026-06-22T14:30:00Z",
+  "request_id": "rec-request-abc123",
+  "model_version": "hybrid-ranker-v2",
+  "experiment_id": "exp-main-vs-v2"
+}
+```
+
+**Tag event example:**
+
+```json
+{
+  "event_id": "018f5c2e-7e4a-7b3d-9e2f-9a2e7c8f4b12",
+  "event_type": "tag_created",
+  "stream_pipeline_version": "tags-v1",
+  "source": "movielens",
+  "occurred_at": "2026-06-22T14:31:00Z",
+  "produced_at": "2026-06-22T14:31:02Z",
+  "user_id": 123,
+  "movie_id": 50,
+  "tag": "funny",
+  "tag_timestamp": "2026-06-22T14:31:00Z"
+}
+```
+
+**Pydantic models:**
+
+```python
+class BaseKafkaEvent(BaseModel):
+    event_id: UUID
+    event_type: str
+    stream_pipeline_version: str
+    source: str
+    occurred_at: datetime
+    produced_at: datetime
+
+class RatingCreatedEvent(BaseKafkaEvent):
+    event_type: Literal["rating_created"]
+    user_id: int
+    movie_id: int
+    rating: float
+    rating_timestamp: datetime
+    request_id: str | None = None
+    model_version: str | None = None
+    experiment_id: str | None = None
+
+class TagCreatedEvent(BaseKafkaEvent):
+    event_type: Literal["tag_created"]
+    user_id: int
+    movie_id: int
+    tag: str
+    tag_timestamp: datetime
+```
+
+Validate every event with Pydantic before produce and before consume.
+
+### DLQ (dead-letter queue)
+
+Use a single Postgres table **`dead_letter_events`**, not Kafka DLQ topics. When validation fails or a consumer cannot write to the event tables, the consumer saves the raw payload and error details to `dead_letter_events`, then commits the Kafka offset so the poison message does not block the pipeline.
+
+Monitor failed messages via the `dead_letter_events` row count (postgres_exporter) and the `dlq_events_total` Prometheus counter.
+
+### Prometheus / Grafana (Phase 2)
+
+Track ingestion health in Prometheus/Grafana alongside existing Postgres exporter panels.
+
+| Metric | Source |
+|--------|--------|
+| Query latency | Worker/app code (histogram), or `pg_stat_statements` later |
+| Failed writes total | Worker/app code (counter) |
+| `ratings_events` row count | Custom SQL via postgres_exporter, or Grafana Postgres datasource |
+| `tag_events` row count | Custom SQL via postgres_exporter, or Grafana Postgres datasource |
+| `catalog_dirty_movies` row count | Custom SQL via postgres_exporter, or Grafana Postgres datasource |
+| `dead_letter_events` row count | Custom SQL via postgres_exporter |
+
+Also expose standard worker metrics: `events_consumed_total`, `consumer_lag`, `dlq_events_total`, `db_write_failures_total`, `db_write_latency_seconds`.
 
 Acceptance criteria:
 
-* Producers publish valid JSON events.
-* Consumers validate events.
+* Producers publish valid JSON events matching the shared Pydantic schemas.
+* Consumers validate events with Pydantic before writing to Postgres.
 * Consumers write to Postgres idempotently using `event_id`.
-* Kafka offsets are committed only after DB transaction success.
-* Consumer metrics are exposed.
+* Kafka offsets are committed after a successful DB write, or after the message is saved to `dead_letter_events`.
+* Invalid or unprocessable messages are saved to `dead_letter_events` (not silently dropped).
+* Consumer and write-failure metrics are exposed to Prometheus.
+* Grafana shows ingestion metrics and table row counts for `ratings_events`, `tag_events`, `catalog_dirty_movies`, and `dead_letter_events`.
 
 ## Phase 3: Catalog Seed and TMDB Enrichment
 

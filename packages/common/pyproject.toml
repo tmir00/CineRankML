@@ -9,6 +9,8 @@ dependencies = [
     "psycopg[binary]",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
+    "confluent-kafka>=2.6",
+    "prometheus-client>=0.21",
 ]
 
 [build-system]
