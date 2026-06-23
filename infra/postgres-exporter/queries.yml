@@ -1,0 +1,18 @@
+cinerankml_table_counts:
+  query: |
+    SELECT 'ratings_events' AS table, COUNT(*) AS count FROM ratings_events
+    UNION ALL
+    SELECT 'tag_events', COUNT(*) FROM tag_events
+    UNION ALL
+    SELECT 'catalog_dirty_movies', COUNT(*) FROM catalog_dirty_movies
+    UNION ALL
+    SELECT 'dead_letter_events', COUNT(*) FROM dead_letter_events
+    UNION ALL
+    SELECT 'csv_ingestion_checkpoints', COUNT(*) FROM csv_ingestion_checkpoints
+  metrics:
+    - table:
+        usage: LABEL
+        description: "Postgres table name"
+      count:
+        usage: GAUGE
+        description: "Row count for the table"

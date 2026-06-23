@@ -6,4 +6,10 @@ requires-python = ">=3.12"
 dependencies = []
 
 [tool.uv.workspace]
-members = ["packages/common"]
+members = [
+    "packages/common",
+    "workers/ratings-producer",
+    "workers/tags-producer",
+    "workers/ratings-consumer",
+    "workers/tags-consumer",
+]

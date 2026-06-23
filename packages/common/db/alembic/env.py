@@ -8,6 +8,8 @@ from common.db.base import Base
 from common.db.models import (  # noqa: F401 — register models on metadata
     CatalogDirtyMovie,
     CatalogMovie,
+    CsvIngestionCheckpoint,
+    DeadLetterEvent,
     EmbeddingVersion,
     MovieContentEmbedding,
     MovieTagCount,

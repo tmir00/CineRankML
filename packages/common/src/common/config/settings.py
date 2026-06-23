@@ -1,3 +1,7 @@
+from typing import Self
+from pathlib import Path
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,5 +18,96 @@ class DatabaseSettings(BaseSettings):
     max_overflow: int = 10
 
 
+class KafkaSettings(BaseSettings):
+    """Kafka broker and topic settings."""
+
+    # Load settings from .env file and ignore extra env variables not in KafkaSettings.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    kafka_bootstrap_servers: str = "localhost:9092"
+    ratings_topic: str = "ratings"
+    tags_topic: str = "tags"
+    ratings_consumer_group: str = "ratings-consumer"
+    tags_consumer_group: str = "tags-consumer"
+
+
+class ProducerSettings(BaseSettings):
+    """CSV producer throttle and Postgres checkpoint settings."""
+
+    # Load settings from .env file and ignore extra env variables not in ProducerSettings.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    csv_path: str = "/data/ratings.csv"
+    rows_per_second: int = 1000
+    row_delay_seconds: float = 1.5
+    row_limit: int | None = None
+    source_file: str | None = None
+    start_row: int = 0
+    producer_log_every_n: int = 1000
+    checkpoint_every_n: int = 1000
+
+    @model_validator(mode="after")
+    def _default_source_file(self) -> Self:
+        """
+        Use the CSV file name as source_file when SOURCE_FILE is not set.
+
+        This keeps checkpoint keys stable across environments (e.g. ratings.csv)
+        even when CSV_PATH differs between local and Docker mounts.
+        """
+        if not self.source_file:
+            self.source_file = Path(self.csv_path).name
+        return self
+
+    # Run the validator before the 'row_limit' field is set.
+    @field_validator("row_limit", mode="before")
+    @classmethod # Pydantic validators are class methods since they do not belong to an instance (instance not yet created), instead to a class.
+    def _empty_row_limit(cls, value: object) -> object:
+        """ Before Pydantic parses row_limit, if the raw value is empty or None, set it to None. """
+        if value == "" or value is None:
+            return None
+        return value
+
+
+class WorkerMetricsSettings(BaseSettings):
+    """Prometheus metrics HTTP server settings."""
+
+    # Load settings from .env file and ignore extra env variables not in WorkerMetricsSettings.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    metrics_port: int = 9100
+    worker_name: str = "worker"
+
+
 def get_database_settings() -> DatabaseSettings:
     return DatabaseSettings()
+
+
+def get_kafka_settings() -> KafkaSettings:
+    return KafkaSettings()
+
+
+def get_producer_settings() -> ProducerSettings:
+    return ProducerSettings()
+
+
+def producer_row_delay_seconds(settings: ProducerSettings) -> float:
+    """
+    Return how long to wait between publishing two CSV rows.
+
+    When ROW_DELAY_SECONDS is greater than zero, that value is used directly.
+    Otherwise the wait is derived from ROWS_PER_SECOND (1 / rows_per_second).
+
+    ============================ Arguments ============================
+    settings: The producer configuration.
+
+    ============================ Returns ============================
+    Seconds to sleep after each published row.
+    """
+    if settings.row_delay_seconds > 0:
+        return settings.row_delay_seconds
+    return 1.0 / max(1, settings.rows_per_second)
+
+
+def get_worker_metrics_settings() -> WorkerMetricsSettings:
+    return WorkerMetricsSettings()
+
