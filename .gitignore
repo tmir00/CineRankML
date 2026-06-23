@@ -220,3 +220,6 @@ __marimo__/
 
 # Cursor Files
 .cursor/
+
+# Datasets
+datasets/
