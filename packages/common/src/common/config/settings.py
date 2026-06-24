@@ -78,6 +78,46 @@ class WorkerMetricsSettings(BaseSettings):
     worker_name: str = "worker"
 
 
+class TmdbSettings(BaseSettings):
+    """TMDB API client settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    tmdb_api_key: str = ""
+    tmdb_base_url: str = "https://api.themoviedb.org"
+    tmdb_requests_per_second: float = 3.0
+    tmdb_timeout_seconds: float = 30.0
+    tmdb_max_retries: int = 3
+
+
+class CatalogSeedSettings(BaseSettings):
+    """MovieLens CSV paths and seed batch size."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    movies_csv_path: str = "/data/movies.csv"
+    links_csv_path: str = "/data/links.csv"
+    seed_batch_size: int = 1000
+
+
+class EnrichmentSettings(BaseSettings):
+    """TMDB enrichment batch job settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    enrichment_batch_size: int = 50
+    enrichment_limit: int | None = None
+    enrichment_log_every_n: int = 100
+
+    @field_validator("enrichment_limit", mode="before")
+    @classmethod
+    def _empty_enrichment_limit(cls, value: object) -> object:
+        """Treat empty env values as no limit."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
 def get_database_settings() -> DatabaseSettings:
     return DatabaseSettings()
 
@@ -110,4 +150,16 @@ def producer_row_delay_seconds(settings: ProducerSettings) -> float:
 
 def get_worker_metrics_settings() -> WorkerMetricsSettings:
     return WorkerMetricsSettings()
+
+
+def get_tmdb_settings() -> TmdbSettings:
+    return TmdbSettings()
+
+
+def get_catalog_seed_settings() -> CatalogSeedSettings:
+    return CatalogSeedSettings()
+
+
+def get_enrichment_settings() -> EnrichmentSettings:
+    return EnrichmentSettings()
 

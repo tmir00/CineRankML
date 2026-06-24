@@ -4,6 +4,8 @@ cinerankml_table_counts:
     UNION ALL
     SELECT 'tag_events', COUNT(*) FROM tag_events
     UNION ALL
+    SELECT 'catalog_movies', COUNT(*) FROM catalog_movies
+    UNION ALL
     SELECT 'catalog_dirty_movies', COUNT(*) FROM catalog_dirty_movies
     UNION ALL
     SELECT 'dead_letter_events', COUNT(*) FROM dead_letter_events
@@ -16,3 +18,43 @@ cinerankml_table_counts:
       count:
         usage: GAUGE
         description: "Row count for the table"
+
+cinerankml_enrichment_pending_movies:
+  query: |
+    SELECT COUNT(*) AS pending
+    FROM catalog_movies
+    WHERE tmdb_id IS NOT NULL
+      AND (enrichment_status IS NULL OR enrichment_status = 'failed')
+  metrics:
+    - pending:
+        usage: GAUGE
+        description: "Movies waiting for TMDB enrichment"
+
+cinerankml_enrichment_status_counts:
+  query: |
+    SELECT enrichment_status AS status, COUNT(*) AS count
+    FROM catalog_movies
+    WHERE enrichment_status IS NOT NULL
+    GROUP BY enrichment_status
+  metrics:
+    - status:
+        usage: LABEL
+        description: "catalog_movies enrichment_status value"
+      count:
+        usage: GAUGE
+        description: "Movies with this enrichment status"
+
+cinerankml_enrichment_failure_reasons:
+  query: |
+    SELECT enrichment_last_error AS reason, COUNT(*) AS count
+    FROM catalog_movies
+    WHERE enrichment_status = 'failed'
+      AND enrichment_last_error IS NOT NULL
+    GROUP BY enrichment_last_error
+  metrics:
+    - reason:
+        usage: LABEL
+        description: "TMDB enrichment failure reason"
+      count:
+        usage: GAUGE
+        description: "Failed movies with this reason"

@@ -187,6 +187,60 @@ services:
     networks:
       - cinerankml
 
+  seed-catalog:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: seed-catalog
+    container_name: cinerankml-seed-catalog
+    profiles:
+      - catalog
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      MOVIES_CSV_PATH: /data/movies.csv
+      LINKS_CSV_PATH: /data/links.csv
+      SEED_BATCH_SIZE: ${SEED_BATCH_SIZE:-1000}
+    volumes:
+      - ./datasets/ml-25m:/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
+  tmdb-enrichment:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: tmdb-enrichment
+    container_name: cinerankml-tmdb-enrichment
+    profiles:
+      - catalog
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      TMDB_REQUESTS_PER_SECOND: ${TMDB_REQUESTS_PER_SECOND:-3}
+      ENRICHMENT_BATCH_SIZE: ${ENRICHMENT_BATCH_SIZE:-50}
+      ENRICHMENT_LIMIT: ${ENRICHMENT_LIMIT:-}
+      ENRICHMENT_LOG_EVERY_N: ${ENRICHMENT_LOG_EVERY_N:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: cinerankml-postgres-exporter

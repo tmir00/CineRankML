@@ -12,4 +12,6 @@ members = [
     "workers/tags-producer",
     "workers/ratings-consumer",
     "workers/tags-consumer",
+    "jobs/seed_catalog",
+    "jobs/tmdb_enrichment",
 ]

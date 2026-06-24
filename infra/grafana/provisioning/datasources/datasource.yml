@@ -10,3 +10,17 @@ datasources: # This is the list of data sources Grafana will automatically creat
     url: http://prometheus:9090   # Host name for the data source.
     isDefault: true           # This makes prometheus the default data source for new panels.
     editable: false           # Can't edit the data source in the Grafana UI.
+
+  - name: Postgres
+    type: postgres
+    uid: postgres
+    access: proxy
+    url: postgres:5432
+    user: cinerankml
+    jsonData:
+      database: cinerankml
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: cinerankml
+    editable: false
