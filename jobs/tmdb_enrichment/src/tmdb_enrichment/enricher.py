@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from common.config.settings import EnrichmentSettings
@@ -19,7 +20,20 @@ from common.tmdb.client import TmdbClient
 logger = logging.getLogger(__name__)
 
 
-def run_enrichment_loop(session: Session, client: TmdbClient, settings: EnrichmentSettings) -> tuple[int, int]:
+@dataclass
+class EnrichmentStats:
+    """Mutable counters updated during the enrichment loop."""
+
+    processed: int = 0
+    failed: int = 0
+
+
+def run_enrichment_loop(
+    session: Session,
+    client: TmdbClient,
+    settings: EnrichmentSettings,
+    stats: EnrichmentStats,
+) -> None:
     """
     Enrich pending catalog movies with TMDB metadata in batches.
 
@@ -33,9 +47,10 @@ def run_enrichment_loop(session: Session, client: TmdbClient, settings: Enrichme
     session: An open SQLAlchemy session (commits happen inside this function).
     client: TMDB HTTP client with rate limiting.
     settings: Batch size, optional limit, and log frequency.
+    stats: Mutable counters updated as movies are enriched or fail.
 
     ============================ Returns ============================
-    A tuple of (records_processed, records_failed).
+    None. Progress counts are stored on stats.processed and stats.failed.
     """
     # Mark movies without a tmdb_id as skipped.
     skipped_no_tmdb = mark_movies_without_tmdb_skipped(session)
@@ -48,8 +63,6 @@ def run_enrichment_loop(session: Session, client: TmdbClient, settings: Enrichme
             extra={"count": skipped_no_tmdb},
         )
 
-    processed = 0
-    failed = 0
     remaining_limit = settings.enrichment_limit
 
     # Loop until no more pending movies or the limit is reached.
@@ -77,7 +90,7 @@ def run_enrichment_loop(session: Session, client: TmdbClient, settings: Enrichme
                 apply_enrichment(session, movie.movie_id, details, "enriched", last_error=None)
                 # Mark the movie as dirty.
                 mark_catalog_movie_dirty(session, movie.movie_id)
-                processed += 1
+                stats.processed += 1
             else:
                 # Set the enrichment status to failed and persist the TMDB error reason.
                 apply_enrichment(
@@ -87,7 +100,7 @@ def run_enrichment_loop(session: Session, client: TmdbClient, settings: Enrichme
                     "failed",
                     last_error=error_type or "http_error",
                 )
-                failed += 1
+                stats.failed += 1
 
             # If there is a remaining limit, decrement it and check if it has reached 0.
             if remaining_limit is not None:
@@ -97,14 +110,14 @@ def run_enrichment_loop(session: Session, client: TmdbClient, settings: Enrichme
                     break
 
             # Calculate the total number of processed and failed movies.
-            total = processed + failed
+            total = stats.processed + stats.failed
             # If the total number of processed and failed movies is a multiple of the log frequency, log the progress.
             if total % settings.enrichment_log_every_n == 0:
                 logger.info(
                     "Enrichment progress",
                     extra={
-                        "processed": processed,
-                        "failed": failed,
+                        "processed": stats.processed,
+                        "failed": stats.failed,
                         "pending": count_pending_enrichment(session),
                     },
                 )
@@ -115,5 +128,3 @@ def run_enrichment_loop(session: Session, client: TmdbClient, settings: Enrichme
         # If there is a remaining limit and it has reached 0, break the loop.
         if remaining_limit is not None and remaining_limit <= 0:
             break
-
-    return processed, failed

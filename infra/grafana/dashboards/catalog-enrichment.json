@@ -169,7 +169,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 16
       },
       "id": 5,
       "options": {
@@ -198,43 +198,6 @@
       ],
       "title": "Recent pipeline runs",
       "type": "table"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 16
-      },
-      "id": 6,
-      "options": {
-        "displayMode": "gradient",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        }
-      },
-      "targets": [
-        {
-          "expr": "cinerankml_enrichment_failure_reasons_count",
-          "legendFormat": "{{reason}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Failures by reason",
-      "type": "bargauge"
     },
     {
       "datasource": {
@@ -267,7 +230,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 26
       },
       "id": 7,
       "options": {
@@ -312,5 +275,5 @@
   "timezone": "browser",
   "title": "Catalog Enrichment",
   "uid": "catalog-enrichment",
-  "version": 3
+  "version": 4
 }

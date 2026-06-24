@@ -24,11 +24,11 @@ cinerankml_enrichment_pending_movies:
     SELECT COUNT(*) AS pending
     FROM catalog_movies
     WHERE tmdb_id IS NOT NULL
-      AND (enrichment_status IS NULL OR enrichment_status = 'failed')
+      AND enrichment_status IS NULL
   metrics:
     - pending:
         usage: GAUGE
-        description: "Movies waiting for TMDB enrichment"
+        description: "Movies never attempted for TMDB enrichment"
 
 cinerankml_enrichment_status_counts:
   query: |

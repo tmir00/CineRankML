@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from common.tmdb.client import TmdbMovieDetails
 from sqlalchemy.dialects.postgresql import insert
 from common.db.models.catalog import CatalogDirtyMovie, CatalogMovie
@@ -95,7 +95,8 @@ def count_pending_enrichment(session: Session) -> int:
     session: An open SQLAlchemy session.
 
     ============================ Returns ============================
-    The number of movies with a tmdb_id and no successful enrichment yet.
+    The number of movies with a tmdb_id that have never been attempted
+    (enrichment_status IS NULL).
     """
     # Build the SQLAlchemy select statement.
     result = session.execute(
@@ -103,10 +104,7 @@ def count_pending_enrichment(session: Session) -> int:
         .select_from(CatalogMovie)
         .where(
             CatalogMovie.tmdb_id.is_not(None),
-            or_(
-                CatalogMovie.enrichment_status.is_(None),
-                CatalogMovie.enrichment_status == "failed",
-            ),
+            CatalogMovie.enrichment_status.is_(None),
         )
     )
     return int(result.scalar_one())
@@ -117,7 +115,7 @@ def fetch_pending_enrichment(session: Session, batch_size: int, remaining_limit:
     Fetch the next batch of movies waiting for TMDB enrichment.
 
     Do this by:
-    1. Selecting rows with a tmdb_id and enrichment_status NULL or failed.
+    1. Selecting rows with a tmdb_id and never-attempted enrichment_status (NULL).
     2. Ordering by movie_id for stable batching.
     3. Applying the smaller of batch_size and remaining_limit when a cap is set.
 
@@ -143,10 +141,7 @@ def fetch_pending_enrichment(session: Session, batch_size: int, remaining_limit:
         select(CatalogMovie)
         .where(
             CatalogMovie.tmdb_id.is_not(None),
-            or_(
-                CatalogMovie.enrichment_status.is_(None),
-                CatalogMovie.enrichment_status == "failed",
-            ),
+            CatalogMovie.enrichment_status.is_(None),
         )
         .order_by(CatalogMovie.movie_id)
         .limit(limit)
