@@ -45,7 +45,9 @@ Add a new workspace member when a phase introduces a new deployable container. D
 | 1 | `packages/common` |
 | 2 | Kafka workers |
 | 3 | `jobs/seed_catalog`, `jobs/tmdb_enrichment` |
-| 4+ | OpenSearch sync, remaining jobs, API, embedder service as each phase ships |
+| 4 | `services/embedder-api`, `jobs/opensearch_sync` |
+| 5 | `jobs/snapshot_to_s3` |
+| 6+ | `jobs/train_cf`, remaining jobs, API as each phase ships |
 
 ## Phase 1: Docker, Postgres, and Schemas
 
@@ -248,63 +250,299 @@ Build and maintain the movie retrieval index.
 Build:
 
 * OpenSearch index mapping.
-* Initial indexing flow.
-* `jobs/opensearch-sync`
+* Initial indexing flow and rebuild-from-Postgres support.
+* `services/embedder-api` (MiniLM-L6-v2 content embeddings over HTTP).
+* `jobs/opensearch_sync` (batch sync of dirty movies to OpenSearch).
 
 Acceptance criteria:
 
 * Movies can be indexed into OpenSearch.
 * Dirty movies are synced from Postgres to OpenSearch.
-* OpenSearch index can be rebuilt from Postgres.
-* Query latency and sync metrics are exposed.
+* Content embeddings are written to `movie_content_embeddings` via embedder-api.
+* OpenSearch index can be rebuilt from Postgres (`REBUILD_INDEX=true`).
+* Sync metrics are exposed:
+  * `dirty_movies_count` and `oldest_dirty_movie_age_seconds` (postgres_exporter).
+  * Embedder health (`up{job="embedder-api"}`) and request rate (`embed_requests_total`).
+  * OpenSearch index document count (`elasticsearch_indices_docs` via opensearch-exporter sidecar).
 
-## Phase 5: S3 Snapshots
+## Phase 5: MinIO Snapshots
 
 Goal:
-Export immutable training snapshots from Postgres to S3.
+Export immutable training snapshots from Postgres to MinIO (S3-compatible object storage).
 
 Build:
 
-* `jobs/snapshot_to_s3`
+* MinIO in root `docker-compose.yml` (local bucket `cinerankml`).
+* `jobs/snapshot_to_s3` (writes via the S3-compatible API to `s3://cinerankml/...`).
+
+### MinIO bucket layout
+
+Local MinIO exposes bucket `cinerankml` with top-level prefixes `raw/`, `snapshots/`, `features/`, `artifacts/`, and `models/`:
+
+```text
+s3://cinerankml/
+  raw/
+    movielens/
+      movies.csv
+      ratings.csv
+      tags.csv
+      links.csv
+
+  snapshots/
+    snapshot_id=2026-06-25T120000Z/
+      ratings_events/
+        part-00000.parquet
+        part-00001.parquet
+      tag_events/
+        part-00000.parquet
+      catalog_movies/
+        part-00000.parquet
+      movie_content_embeddings/
+        part-00000.parquet
+      manifest.json
+
+  features/
+    hybrid_ranker/
+      dataset_version=2026-06-25T121000Z/
+        train/
+          part-00000.parquet
+          part-00001.parquet
+        validation/
+          part-00000.parquet
+        test/
+          part-00000.parquet
+        manifest.json
+
+  artifacts/
+    collaborative_filtering/
+      cf_version=cf-v1-2026-06-25T122000Z/
+        movie_cf_embeddings.parquet
+        cf_model.pt
+        config.json
+        metrics.json
+        manifest.json
+
+  models/
+    hybrid_ranker/
+      model_version=hybrid-v1-2026-06-25T123000Z/
+        hybrid_ranker_model.pt
+        model_config.json
+        training_metrics.json
+        test_metrics.json
+        manifest.json
+```
+
+Phase 5 implements `raw/` (optional seed copies) and `snapshots/`; later phases write to `features/`, `artifacts/`, and `models/`.
 
 Acceptance criteria:
 
-* Ratings, catalog movies, and content embeddings are exported as Parquet.
+* MinIO is running locally with bucket `cinerankml`.
+* Ratings, tag events, catalog movies, and content embeddings are exported as partitioned Parquet parts under `snapshots/snapshot_id=.../{table}/part-*.parquet`.
 * Snapshot path includes `snapshot_id`.
 * `manifest.json` is written last.
 * Snapshot is usable only if manifest status is `complete`.
 
-## Phase 6: Collaborative Filtering Embeddings
+## Phase 6: Collaborative Filtering Training
 
 Goal:
-Train collaborative filtering movie embeddings.
+Train a small dot-product collaborative filtering model and save learned **movie behavior embeddings** for the hybrid ranker.
+
+The CF model is **not the final recommender**. It is a **feature generator**: it learns from rating behavior and produces `movie_cf_embeddings.parquet`, which Phase 7 turns into CF features for the hybrid ranker.
 
 Build:
 
 * `jobs/train_cf`
+* MLflow as a local Docker service (tracking URI for CF experiments)
+* Shared snapshot reader utilities (load latest complete snapshot from MinIO unless `SNAPSHOT_ID` is set)
+
+### Why CF embeddings?
+
+Content embeddings (from movie text/metadata) answer:
+
+> "Are these movies similar by title, genres, and overview?"
+
+CF embeddings (from ratings) answer:
+
+> "Do users who liked similar movies also tend to like this movie?"
+
+That behavior signal is useful because content alone can miss patterns like: Movie A and Movie B have very different descriptions, but users who like A often like B. CF learns those patterns from `ratings_events`.
+
+### Pipeline role
+
+```text
+ratings_events (snapshot)
+  → CF model learns movie behavior embeddings
+  → movie_cf_embeddings.parquet
+  → hybrid feature engineering (Phase 7) builds CF features
+  → hybrid ranker (Phase 8+) uses those features
+```
+
+### CF model
+
+This is a **collaborative filtering training job**, not a feature-engineering job.
+
+Given `user_id` and `movie_id`, the model learns embeddings so the dot product predicts the user's rating.
+
+Training input is one row per rating event from the frozen snapshot `ratings_events` table:
+
+```text
+user_id, movie_id, rating
+```
+
+Example:
+
+```text
+user_id = 10
+movie_id = 50
+rating = 4.5
+```
+
+Internally:
+
+* `user_id` → user embedding lookup → e.g. `[0.23, 0.12, 0.44, 0.51, ...]`
+* `movie_id` → movie embedding lookup → e.g. `[0.14, 0.21, 0.10, 0.31, ...]`
+
+Prediction:
+
+```text
+predicted_rating = dot(user_embedding, movie_embedding)
+```
+
+Example:
+
+```text
+predicted_rating = 3.4
+actual rating = 4.5
+loss = error between predicted and actual rating
+```
+
+Training updates user and movie embeddings to reduce that error.
+
+Embedding dimension is **64** (required by the hybrid ranker feature schema).
+
+### Train / holdout split
+
+Use a **temporal split** on snapshot ratings ordered by rating timestamp:
+
+* **Train:** oldest 80% of ratings
+* **Holdout:** newest 20% of ratings (used for CF validation metrics; not used for gradient updates)
+
+Do not use holdout ratings during training.
+
+### Snapshot input selection
+
+* Default: train on the **latest complete snapshot** (`manifest.json` with `status=complete`).
+* Override: set `SNAPSHOT_ID` to a specific snapshot id.
+
+### Training runtime
+
+* Support **CPU and GPU** training (auto-detect or env-controlled device selection).
+* Log train loss and holdout RMSE/MAE to MLflow.
+
+### CF artifact layout
+
+```text
+s3://cinerankml/artifacts/collaborative_filtering/
+  cf_version=cf-v1-2026-06-25T122000Z/
+    movie_cf_embeddings.parquet
+    cf_model.pt
+    config.json
+    metrics.json
+    manifest.json
+```
+
+`movie_cf_embeddings.parquet` is the primary downstream artifact:
+
+```text
+movie_id
+cf_embedding
+```
+
+Example:
+
+```text
+movie_id = 50
+cf_embedding = [0.14, 0.21, 0.10, 0.31, ...]
+```
+
+`cf_model.pt` stores the trained embedding model for reproducibility and re-export.
+
+Write data files first and `manifest.json` last with `status=complete`.
+
+### CF features (built in Phase 7, not Phase 6)
+
+Phase 6 saves **movie-level** embeddings only. Phase 7 (`create_features`) combines them with content embeddings and metadata to build per-example hybrid features.
+
+For each recommendation row (user profile + candidate movie):
+
+| Feature | Dim | How it is built |
+|---------|-----|-----------------|
+| `user_cf_profile` | 64 | Weighted average of `cf_embedding` for movies the user rated |
+| `candidate_cf_embedding` | 64 | Lookup `cf_embedding` for the candidate movie |
+| `cf_cosine_similarity` | 1 | Cosine similarity between `user_cf_profile` and `candidate_cf_embedding` |
+| `user_cf_profile * candidate_cf_embedding` | 64 | Elementwise product |
+
+Example:
+
+```text
+User rated:
+  Movie 5 = 5 stars
+  Movie 6 = 4 stars
+
+Look up movie_cf_embedding[5] and movie_cf_embedding[6]
+  → user_cf_profile = weighted average of those embeddings
+
+Candidate movie 50:
+  candidate_cf_embedding = movie_cf_embedding[50]
+
+  cf_cosine_similarity = similarity(user_cf_profile, candidate_cf_embedding)
+  elementwise_product = user_cf_profile * candidate_cf_embedding
+```
+
+These four CF feature groups are slots 5–8 in the hybrid ranker input vector (total `1356` dims; see Phase 7 / ML training rules).
+
+### Inference (Phase 9+)
+
+Do **not** call the CF model directly at online inference. Training already produced `movie_cf_embeddings.parquet`. At request time:
+
+1. Load/fetch saved movie CF embeddings for movies the user rated → build `user_cf_profile`
+2. Load/fetch `candidate_cf_embedding` for each candidate movie
+3. Compute `cf_cosine_similarity` and elementwise product
+4. Pass those CF features into the hybrid ranker
 
 Acceptance criteria:
 
-* CF model trains on training ratings.
-* Validation RMSE/MAE are logged.
-* Versioned `movie_cf_embeddings.parquet` is saved to S3.
-* CF metrics and manifest are saved.
-* CF run is logged to MLflow.
+* CF model trains on the oldest 80% of snapshot ratings (temporal split).
+* Holdout RMSE/MAE on the newest 20% are logged.
+* Versioned `movie_cf_embeddings.parquet` and `cf_model.pt` are saved to MinIO (`s3://cinerankml/artifacts/...`).
+* `config.json`, `metrics.json`, and `manifest.json` are saved.
+* CF run is logged to MLflow (local Docker tracking server).
 
 ## Phase 7: Feature Generation
 
 Goal:
-Create hybrid ranker train/validation/test datasets.
+Create hybrid ranker train/validation/test datasets by combining content embeddings, CF embeddings, and metadata into fixed-size feature vectors.
 
 Build:
 
 * `jobs/create_features`
 * Shared feature utilities in `packages/common/features`
 
+### CF features from Phase 6 artifacts
+
+Phase 7 reads frozen `movie_cf_embeddings.parquet` (not the live CF model) and builds these behavior-based features per row:
+
+* `user_cf_profile` `[64]`
+* `candidate_cf_embedding` `[64]`
+* `cf_cosine_similarity` `[1]`
+* `user_cf_profile * candidate_cf_embedding` `[64]`
+
+Together with content-based features (user/candidate content embeddings, cosine similarity, elementwise product), behavior features, and metadata features, each example becomes a **1356-dimensional** input vector for the hybrid ranker.
+
 Acceptance criteria:
 
 * Uses frozen snapshot, content embeddings, and CF embeddings.
-* Outputs train/validation/test datasets to S3.
+* Outputs train/validation/test datasets to MinIO (`s3://cinerankml/features/...`).
 * Each feature vector has input dimension `1356`.
 * Dataset manifest records `snapshot_id`, `cf_version`, `content_embedding_version`, and `feature_schema_version`.
 
@@ -324,7 +562,7 @@ Acceptance criteria:
 * Validation RMSE is used for early stopping.
 * Test metrics are calculated after training.
 * Fixed benchmark metrics are calculated for fair model comparison.
-* Model artifacts are saved to S3.
+* Model artifacts are saved to MinIO (`s3://cinerankml/models/...`).
 * Metrics and artifacts are logged to MLflow.
 
 ## Phase 9: FastAPI Inference
@@ -340,7 +578,7 @@ Acceptance criteria:
 
 * `/recommend` accepts user ratings or `user_id`.
 * API retrieves candidates from OpenSearch.
-* API builds feature matrix with shape `[num_candidates, 1356]`.
+* API builds feature matrix with shape `[num_candidates, 1356]` (including CF features from saved `movie_cf_embeddings`, not a live CF model forward pass).
 * API scores candidates with main model.
 * API returns top-K recommendations.
 * Recommendation impressions are logged to Postgres.
@@ -353,7 +591,7 @@ Make the project production-style and observable.
 
 Build:
 
-* MLflow model aliases: `main` and `candidate`.
+* MLflow model aliases: `main` and `candidate` (basic MLflow tracking starts in Phase 6).
 * Prometheus scrape configs.
 * Grafana dashboards.
 * Basic online experiment monitoring.

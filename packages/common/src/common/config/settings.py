@@ -163,3 +163,90 @@ def get_catalog_seed_settings() -> CatalogSeedSettings:
 def get_enrichment_settings() -> EnrichmentSettings:
     return EnrichmentSettings()
 
+
+class OpenSearchSettings(BaseSettings):
+    """OpenSearch connection and index settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    opensearch_host: str = "localhost"
+    opensearch_port: int = 9200
+    opensearch_use_ssl: bool = False
+    opensearch_verify_certs: bool = False
+    opensearch_timeout_seconds: float = 30.0
+    opensearch_index_alias: str = "movies"
+    opensearch_bulk_batch_size: int = 100
+
+
+class EmbedderSettings(BaseSettings):
+    """HTTP client settings for the embedder-api service."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    embedder_base_url: str = "http://localhost:8080"
+    embedder_timeout_seconds: float = 60.0
+    embedding_version: str = "content-v1"
+    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dimension: int = 384
+    embedding_text_template_version: str = "v1"
+
+
+class SyncSettings(BaseSettings):
+    """OpenSearch sync batch job settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    sync_batch_size: int = 50
+    sync_limit: int | None = None
+    rebuild_index: bool = False
+    sync_log_every_n: int = 100
+    job_name: str = "opensearch_sync"
+
+    @field_validator("sync_limit", mode="before")
+    @classmethod
+    def _empty_sync_limit(cls, value: object) -> object:
+        """Treat empty env values as no limit."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_opensearch_settings() -> OpenSearchSettings:
+    return OpenSearchSettings()
+
+
+def get_embedder_settings() -> EmbedderSettings:
+    return EmbedderSettings()
+
+
+def get_sync_settings() -> SyncSettings:
+    return SyncSettings()
+
+
+class SnapshotSettings(BaseSettings):
+    """Snapshot-to-S3 batch job and MinIO settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    snapshot_batch_size: int = 50_000
+    snapshot_id: str | None = None
+    job_name: str = "snapshot_to_s3"
+    metrics_job_name: str = "s3_snapshot"
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("snapshot_id", mode="before")
+    @classmethod
+    def _empty_snapshot_id(cls, value: object) -> object:
+        """Treat empty env values as auto-generated snapshot id."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_snapshot_settings() -> SnapshotSettings:
+    return SnapshotSettings()
+

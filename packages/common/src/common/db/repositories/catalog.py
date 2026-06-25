@@ -271,3 +271,174 @@ def mark_movies_without_tmdb_skipped(session: Session) -> int:
         }
     )
     return int(result)
+
+
+@dataclass(frozen=True)
+class DirtyMovieRow:
+    """One dirty catalog movie joined with catalog metadata."""
+
+    movie_id: int
+    title: str
+    year: int | None
+    genres: list[str] | None
+    overview: str | None
+    tagline: str | None
+    original_language: str | None
+    tmdb_keywords: list[str] | None
+    runtime: int | None
+    tmdb_popularity: float | None
+    tmdb_vote_average: float | None
+    tmdb_vote_count: int | None
+    tmdb_id: int | None
+    imdb_id: str | None
+    attempt_count: int
+
+
+def fetch_dirty_movie_batch(session: Session, limit: int) -> list[DirtyMovieRow]:
+    """
+    Fetch the next batch of movies waiting for OpenSearch sync.
+
+    Do this by:
+    1. Joining catalog_dirty_movies with catalog_movies.
+    2. Ordering by last_dirty_at so the oldest work is processed first.
+    3. Returning up to limit rows.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    limit: Maximum dirty movies to fetch.
+
+    ============================ Returns ============================
+    Dirty movie rows with catalog metadata attached.
+    """
+    if limit <= 0:
+        return []
+
+    # Build the SQLAlchemy select statement.
+    stmt = (
+        select(CatalogMovie, CatalogDirtyMovie.attempt_count)
+        .join(CatalogDirtyMovie, CatalogDirtyMovie.movie_id == CatalogMovie.movie_id)
+        .order_by(CatalogDirtyMovie.last_dirty_at)
+        .limit(limit)
+    )
+
+    # Execute the select statement and return a list of DirtyMovieRow objects.
+    rows = session.execute(stmt).all()
+    return [
+        DirtyMovieRow(
+            movie_id=movie.movie_id,
+            title=movie.title,
+            year=movie.year,
+            genres=movie.genres,
+            overview=movie.overview,
+            tagline=movie.tagline,
+            original_language=movie.original_language,
+            tmdb_keywords=movie.tmdb_keywords,
+            runtime=movie.runtime,
+            tmdb_popularity=movie.tmdb_popularity,
+            tmdb_vote_average=movie.tmdb_vote_average,
+            tmdb_vote_count=movie.tmdb_vote_count,
+            tmdb_id=movie.tmdb_id,
+            imdb_id=movie.imdb_id,
+            attempt_count=int(attempt_count),
+        )
+        for movie, attempt_count in rows
+    ]
+
+
+def clear_dirty_movie(session: Session, movie_id: int) -> None:
+    """
+    Remove one movie from the dirty queue after a successful OpenSearch sync.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session inside a transaction.
+    movie_id: Movie that finished syncing successfully.
+    """
+    session.query(CatalogDirtyMovie).filter(CatalogDirtyMovie.movie_id == movie_id).delete()
+
+
+def record_dirty_sync_failure(session: Session, movie_id: int, error: str) -> None:
+    """
+    Record a failed sync attempt for one dirty movie.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session inside a transaction.
+    movie_id: Movie that failed to sync.
+    error: Short error message to store on the dirty row.
+    """
+    # Get the current time.
+    now = datetime.now(tz=UTC)
+
+    # Record the failed sync attempt by updating the dirty movie row and incrementing the attempt count.
+    session.execute(
+        CatalogDirtyMovie.__table__.update()
+        .where(CatalogDirtyMovie.movie_id == movie_id)
+        .values(
+            attempt_count=CatalogDirtyMovie.attempt_count + 1,
+            last_error=error[:2000],
+            last_dirty_at=now,
+        )
+    )
+
+
+def mark_all_catalog_movies_dirty(session: Session) -> int:
+    """
+    Mark every catalog movie dirty for a full OpenSearch rebuild.
+
+    Do this by:
+    1. Selecting all catalog movie ids.
+    2. Upserting catalog_dirty_movies rows for each id.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session inside a transaction.
+
+    ============================ Returns ============================
+    The number of movies marked dirty.
+    """
+    # Get the current time.
+    now = datetime.now(tz=UTC)
+
+    # Get all the movie ids.
+    movie_ids = list(session.scalars(select(CatalogMovie.movie_id)).all())
+    if not movie_ids:
+        return 0
+
+    # Build the list of dictionaries for the bulk insert.
+    values = [
+        {
+            "movie_id": movie_id,
+            "first_dirty_at": now,
+            "last_dirty_at": now,
+            "attempt_count": 0,
+            "last_error": None,
+        }
+        for movie_id in movie_ids
+    ]
+
+    # Build the SQLAlchemy insert statement for the bulk insert into catalog_dirty_movies.
+    stmt = insert(CatalogDirtyMovie).values(values)
+
+    # Build the SQLAlchemy on conflict do update statement for movies that already exist in the table.
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["movie_id"],
+        set_={
+            "last_dirty_at": now,
+            "attempt_count": 0,
+            "last_error": None,
+        },
+    )
+    
+    session.execute(stmt)
+    # Return the number of movies marked dirty.
+    return len(movie_ids)
+
+
+def count_dirty_movies(session: Session) -> int:
+    """
+    Count movies still waiting for OpenSearch sync.
+
+    ============================ Returns ============================
+    Number of rows in catalog_dirty_movies.
+    """
+    # Build the SQLAlchemy select statement to count the number of rows in catalog_dirty_movies.
+    result = session.execute(select(func.count()).select_from(CatalogDirtyMovie))
+    return int(result.scalar_one())

@@ -12,6 +12,8 @@ dependencies = [
     "confluent-kafka>=2.6",
     "prometheus-client>=0.21",
     "httpx>=0.27",
+    "opensearch-py>=2.7",
+    "boto3>=1.35",
 ]
 
 [build-system]
@@ -20,3 +22,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/common"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/common/opensearch/movies_mapping.json" = "common/opensearch/movies_mapping.json"

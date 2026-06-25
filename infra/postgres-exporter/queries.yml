@@ -58,3 +58,24 @@ cinerankml_enrichment_failure_reasons:
       count:
         usage: GAUGE
         description: "Failed movies with this reason"
+
+cinerankml_dirty_movies_count:
+  query: |
+    SELECT COUNT(*) AS dirty_movies_count
+    FROM catalog_dirty_movies
+  metrics:
+    - dirty_movies_count:
+        usage: GAUGE
+        description: "Movies waiting for OpenSearch sync"
+
+cinerankml_oldest_dirty_movie_age_seconds:
+  query: |
+    SELECT COALESCE(
+      EXTRACT(EPOCH FROM (now() - MIN(first_dirty_at))),
+      0
+    ) AS oldest_dirty_movie_age_seconds
+    FROM catalog_dirty_movies
+  metrics:
+    - oldest_dirty_movie_age_seconds:
+        usage: GAUGE
+        description: "Age in seconds of the oldest dirty movie"

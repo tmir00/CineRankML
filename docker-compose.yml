@@ -241,6 +241,205 @@ services:
     networks:
       - cinerankml
 
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: cinerankml-opensearch
+    profiles:
+      - search
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cinerankml
+
+  opensearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:latest
+    container_name: cinerankml-opensearch-exporter
+    profiles:
+      - search
+    command:
+      - "--es.uri=http://opensearch:9200"
+      - "--es.indices"
+    ports:
+      - "9114:9114"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - cinerankml
+
+  embedder-api:
+    build:
+      context: .
+      dockerfile: infra/docker/services/Dockerfile
+      args:
+        PACKAGE: embedder-api
+    container_name: cinerankml-embedder-api
+    profiles:
+      - search
+    env_file:
+      - .env
+    environment:
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDER_HOST: 0.0.0.0
+      EMBEDDER_PORT: 8080
+      METRICS_PORT: 9110
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - cinerankml
+
+  opensearch-sync:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: opensearch-sync
+    container_name: cinerankml-opensearch-sync
+    profiles:
+      - search
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_INDEX_ALIAS: ${OPENSEARCH_INDEX_ALIAS:-movies}
+      OPENSEARCH_BULK_BATCH_SIZE: ${OPENSEARCH_BULK_BATCH_SIZE:-100}
+      EMBEDDER_BASE_URL: http://embedder-api:8080
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-content-v1}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      EMBEDDING_TEXT_TEMPLATE_VERSION: ${EMBEDDING_TEXT_TEMPLATE_VERSION:-v1}
+      SYNC_BATCH_SIZE: ${SYNC_BATCH_SIZE:-50}
+      SYNC_LIMIT: ${SYNC_LIMIT:-}
+      SYNC_LOG_EVERY_N: ${SYNC_LOG_EVERY_N:-100}
+      REBUILD_INDEX: ${REBUILD_INDEX:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      opensearch:
+        condition: service_healthy
+      embedder-api:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - cinerankml
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: cinerankml-minio
+    profiles:
+      - snapshots
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cinerankml
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: cinerankml-minio-init
+    profiles:
+      - snapshots
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${S3_BUCKET}
+      "
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - cinerankml
+
+  pushgateway:
+    image: quay.io/prometheus/pushgateway:latest
+    container_name: cinerankml-pushgateway
+    ports:
+      - "9091:9091"
+    networks:
+      - cinerankml
+
+  snapshot-to-s3:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: snapshot-to-s3
+    container_name: cinerankml-snapshot-to-s3
+    profiles:
+      - snapshots
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      SNAPSHOT_BATCH_SIZE: ${SNAPSHOT_BATCH_SIZE:-50000}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      SNAPSHOT_METRICS_JOB_NAME: ${SNAPSHOT_METRICS_JOB_NAME:-s3_snapshot}
+      SNAPSHOT_ID: ${SNAPSHOT_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+    restart: "no"
+    networks:
+      - cinerankml
+
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: cinerankml-postgres-exporter
@@ -272,6 +471,8 @@ services:
         condition: service_completed_successfully
       postgres-exporter:
         condition: service_started
+      pushgateway:
+        condition: service_started
     networks:
       - cinerankml
 
@@ -297,6 +498,8 @@ services:
 
 volumes:
   pgdata:
+  osdata:
+  miniodata:
 
 networks:
   cinerankml:

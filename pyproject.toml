@@ -14,4 +14,7 @@ members = [
     "workers/tags-consumer",
     "jobs/seed_catalog",
     "jobs/tmdb_enrichment",
+    "jobs/opensearch_sync",
+    "jobs/snapshot_to_s3",
+    "services/embedder-api",
 ]
