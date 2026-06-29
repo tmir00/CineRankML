@@ -1,7 +1,7 @@
 from typing import Self
 from pathlib import Path
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -249,4 +249,41 @@ class SnapshotSettings(BaseSettings):
 
 def get_snapshot_settings() -> SnapshotSettings:
     return SnapshotSettings()
+
+
+class CfDatasetSettings(BaseSettings):
+    """CF dataset prep batch job and MinIO settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    snapshot_id: str | None = None
+    cf_dataset_version: str | None = None
+    cf_shuffle_seed: int = 42
+    train_fraction: float = Field(
+        default=0.8,
+        validation_alias=AliasChoices("CF_TRAIN_FRACTION", "TRAIN_FRACTION"),
+    )
+    cf_part_row_limit: int = 500_000
+    job_name: str = "prepare_cf_dataset"
+    metrics_job_name: str = Field(
+        default="prepare_cf_dataset",
+        validation_alias=AliasChoices("CF_DATASET_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("snapshot_id", "cf_dataset_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Treat empty env values as auto-generated ids."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_cf_dataset_settings() -> CfDatasetSettings:
+    return CfDatasetSettings()
 

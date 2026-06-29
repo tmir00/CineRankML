@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from datetime import UTC, datetime
+
 from typing import Any, Callable
 from sqlalchemy.orm import Session
 from collections.abc import Iterator
+from sqlalchemy import and_, or_, select
 from common.db.models.catalog import CatalogMovie
 from common.db.models.embeddings import MovieContentEmbedding
 from common.db.models.events import RatingsEvent, TagEvent
@@ -50,31 +52,49 @@ def _iter_keyset_batches(session: Session, batch_size: int, fetch_batch: Callabl
 
 
 def iter_ratings_events(session: Session, batch_size: int) -> Iterator[list[dict[str, Any]]]:
-    """ 
-    Yield ratings_events rows in keyset-paginated batches.
+    """
+    Yield ratings_events rows in time-ordered keyset-paginated batches.
 
     Do this by:
-    1. Defining a fetch function that loads the next batch of rows given (session, last_cursor, batch_size).
-    2. Calling _iter_keyset_batches so that it yields the rows as lists of dicts.
-    
+    1. Defining a fetch function that loads the next batch after (rating_timestamp, id).
+    2. Yielding each batch as a list of row dicts until no rows remain.
+
     ========================================== Arguments ==========================================
     session: An open SQLAlchemy session.
     batch_size: Maximum rows per batch.
-    
+
     ========================================== Returns ==========================================
     An iterator of lists of dicts, each representing a batch of rows.
     """
+    # Start before the first possible row so the first page includes the earliest rating.
+    last_timestamp = datetime.min.replace(tzinfo=UTC)
+    last_id = 0
 
-    def fetch(session: Session, last_id: int, limit: int) -> list[RatingsEvent]:
+    # While we have rows to yield, yield the rows in time-ordered keyset-paginated batches.
+    while True:
+        # Build the SQL statement to fetch the next batch of rows.
         stmt = (
+            # Select the next batch of rows.
             select(RatingsEvent)
-            .where(RatingsEvent.id > last_id)
-            .order_by(RatingsEvent.id)
-            .limit(limit)
+            .where( # Where
+                or_( # Either
+                    RatingsEvent.rating_timestamp > last_timestamp, # The rating timestamp is greater than the last timestamp. Or..
+                    and_( 
+                        RatingsEvent.rating_timestamp == last_timestamp, # The rating timestamp is equal to the last timestamp. And..
+                        RatingsEvent.id > last_id, # The id is greater than the last id.
+                    ),
+                )
+            )
+            .order_by(RatingsEvent.rating_timestamp, RatingsEvent.id)
+            .limit(batch_size)
         )
-        return list(session.scalars(stmt).all())
+        rows = list(session.scalars(stmt).all())
+        if not rows:
+            break
 
-    yield from _iter_keyset_batches(session, batch_size, fetch, lambda row: row.id)
+        yield [_model_to_dict(row) for row in rows]
+        last_timestamp = rows[-1].rating_timestamp
+        last_id = rows[-1].id
 
 
 def iter_tag_events(session: Session, batch_size: int) -> Iterator[list[dict[str, Any]]]:

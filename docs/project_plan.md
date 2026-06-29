@@ -47,7 +47,9 @@ Add a new workspace member when a phase introduces a new deployable container. D
 | 3 | `jobs/seed_catalog`, `jobs/tmdb_enrichment` |
 | 4 | `services/embedder-api`, `jobs/opensearch_sync` |
 | 5 | `jobs/snapshot_to_s3` |
-| 6+ | `jobs/train_cf`, remaining jobs, API as each phase ships |
+| 6 | `jobs/prepare_cf_dataset` |
+| 7 | `jobs/train_cf` |
+| 8+ | `jobs/create_features`, remaining jobs, API as each phase ships |
 
 ## Phase 1: Docker, Postgres, and Schemas
 
@@ -302,6 +304,17 @@ s3://cinerankml/
       manifest.json
 
   features/
+    cf_dataset/
+      cf_dataset_version=2026-06-25T121500Z/
+        user_id_map.parquet
+        movie_id_map.parquet
+        train/
+          part-00000.parquet
+          part-00001.parquet
+        holdout/
+          part-00000.parquet
+        manifest.json
+
     hybrid_ranker/
       dataset_version=2026-06-25T121000Z/
         train/
@@ -318,8 +331,8 @@ s3://cinerankml/
       cf_version=cf-v1-2026-06-25T122000Z/
         movie_cf_embeddings.parquet
         cf_model.pt
-        config.json
-        metrics.json
+        cf_config.json
+        cf_metrics.json
         manifest.json
 
   models/
@@ -334,26 +347,160 @@ s3://cinerankml/
 
 Phase 5 implements `raw/` (optional seed copies) and `snapshots/`; later phases write to `features/`, `artifacts/`, and `models/`.
 
+### Snapshot export order (required for Phase 6)
+
+* Export `ratings_events` **ordered by `rating_timestamp`, `id`** (tie-break on `id`).
+* Add a Postgres index on **`(rating_timestamp, id)`** on `ratings_events`.
+* Other tables may keep existing keyset export order (`id`).
+* Time-ordered snapshot parts make DuckDB temporal split cheaper and deterministic in Phase 6.
+
 Acceptance criteria:
 
 * MinIO is running locally with bucket `cinerankml`.
 * Ratings, tag events, catalog movies, and content embeddings are exported as partitioned Parquet parts under `snapshots/snapshot_id=.../{table}/part-*.parquet`.
+* `ratings_events` parts are time-ordered by `rating_timestamp`, `id`.
+* Postgres has an index on `ratings_events (rating_timestamp, id)`.
 * Snapshot path includes `snapshot_id`.
 * `manifest.json` is written last.
 * Snapshot is usable only if manifest status is `complete`.
 
-## Phase 6: Collaborative Filtering Training
+## Phase 6: Prepare CF Dataset
 
 Goal:
-Train a small dot-product collaborative filtering model and save learned **movie behavior embeddings** for the hybrid ranker.
+Use DuckDB over MinIO snapshot Parquet to produce a versioned, mapped, shuffled CF training dataset for PyTorch training in Phase 7.
 
-The CF model is **not the final recommender**. It is a **feature generator**: it learns from rating behavior and produces `movie_cf_embeddings.parquet`, which Phase 7 turns into CF features for the hybrid ranker.
+Build:
+
+* `jobs/prepare_cf_dataset`
+* Shared DuckDB + MinIO utilities in `packages/common/storage` (S3 Parquet reads, MinIO connection settings)
+* Shared snapshot reader utilities (resolve latest complete snapshot from MinIO unless `SNAPSHOT_ID` is set)
+* Env: `CF_SHUFFLE_SEED` (default `42`) for deterministic train shuffle
+
+### Why a separate prep phase?
+
+Raw snapshot ratings are too large to load entirely into Python memory for sorting, mapping, and shuffling. DuckDB scans Parquet parts on MinIO directly and writes a compact, training-ready dataset that Phase 7 streams batch-by-batch.
+
+### Pipeline role
+
+```text
+ratings_events (snapshot, time-ordered)
+  → DuckDB prep (Phase 6)
+  → features/cf_dataset/
+  → CF PyTorch training (Phase 7)
+  → movie_cf_embeddings.parquet
+  → hybrid feature engineering (Phase 8)
+  → hybrid ranker (Phase 9+) uses those features
+```
+
+### Snapshot input selection
+
+* Default: use the **latest complete snapshot** (`manifest.json` with `status=complete`).
+* Override: set `SNAPSHOT_ID` to a specific snapshot id.
+
+### DuckDB prep pipeline (in-job stages — not persisted)
+
+These steps run inside `prepare_cf_dataset` using DuckDB over `read_parquet('s3://...')`. Intermediate results are **not** written to MinIO.
+
+1. **Split** — temporal 80/20 on `rating_timestamp` (oldest → train, newest → holdout). Use `ROW_NUMBER() OVER (ORDER BY rating_timestamp, id)` or equivalent; leverage time-ordered snapshot export from Phase 5.
+2. **Build maps** — `user_id_map` from train-split users only; `movie_id_map` from `catalog_movies` (all catalog movies get an index).
+3. **Join maps** — produce mapped columns: `user_idx`, `movie_idx`, `rating`.
+4. **Shuffle train once (deterministic)** — DuckDB shuffles mapped train rows **once** during prep using a fixed seed (not per training epoch). Write shuffled train parts to MinIO. The same snapshot + seed must produce the same `train/` part order and row order.
+
+Holdout is mapped but **not shuffled**.
+
+### Deterministic train shuffle
+
+Train shuffle must be **reproducible** for the same snapshot. Use a configured seed via env var:
+
+```text
+CF_SHUFFLE_SEED=42
+```
+
+Default `CF_SHUFFLE_SEED` is `42` unless overridden. Record the seed used in `manifest.json` as `shuffle_seed`.
+
+Conceptually, prefer a deterministic ordering such as:
+
+```sql
+ORDER BY hash(user_id, movie_id, rating_timestamp, {shuffle_seed})
+```
+
+Alternatively, set DuckDB's random seed before a shuffle step so the same snapshot and seed yield identical `train/` output.
+
+Do **not** use non-deterministic shuffle without recording a seed — Phase 7 training depends on stable prep output for reproducibility and debugging.
+
+### Train / holdout split
+
+Use a **temporal split** on snapshot ratings ordered by rating timestamp:
+
+* **Train:** oldest 80% of ratings
+* **Holdout:** newest 20% of ratings (used for CF validation metrics in Phase 7; not used for gradient updates)
+
+Do not use holdout ratings during training.
+
+### Persisted MinIO layout (final outputs only)
+
+Path: `s3://cinerankml/features/cf_dataset/cf_dataset_version={cf_dataset_version}/`
+
+```text
+features/cf_dataset/
+  cf_dataset_version=2026-06-25T121500Z/
+    user_id_map.parquet          # columns: user_id, user_idx
+    movie_id_map.parquet         # columns: movie_id, movie_idx
+    train/
+      part-00000.parquet         # columns: user_idx, movie_idx, rating (shuffled)
+      part-00001.parquet
+    holdout/
+      part-00000.parquet         # columns: user_idx, movie_idx, rating (time-ordered)
+    manifest.json                # written last; status=complete
+```
+
+Do **not** persist intermediate `train_raw`, `holdout_raw`, or unshuffled `train_mapped` objects.
+
+### CF dataset manifest fields
+
+The `manifest.json` written last must include these fields (row counts and `shuffle_seed` are required for lineage and reproducibility):
+
+| Field | Description |
+|-------|-------------|
+| `snapshot_id` | Source snapshot this dataset was built from |
+| `cf_dataset_version` | Version id for this CF dataset |
+| `train_row_count` | Number of rows in `train/` |
+| `holdout_row_count` | Number of rows in `holdout/` |
+| `num_users` | Size of `user_id_map` (train-split users) |
+| `num_movies` | Size of `movie_id_map` (catalog movies) |
+| `train_fraction` | Temporal split ratio (default `0.8`) |
+| `shuffle_seed` | Seed used for deterministic train shuffle (e.g. `42` from `CF_SHUFFLE_SEED`) |
+| `created_at` | UTC timestamp when prep started or finished |
+| `status` | `complete` or `failed` |
+
+Also recommended for operational traceability:
+
+* `finished_at`, `pipeline_run_id`
+* Object keys and per-part row counts for maps and `train/` / `holdout/` parts
+
+**Especially important:** `shuffle_seed` — the train shuffle must be reproducible when re-running prep on the same snapshot with the same seed.
+
+Acceptance criteria:
+
+* Reads ratings and catalog Parquet from MinIO via DuckDB.
+* Produces temporal 80/20 split consistent with this plan.
+* Shuffles train rows deterministically using `CF_SHUFFLE_SEED` (default `42`) and records `shuffle_seed` in `manifest.json`.
+* Manifest includes `snapshot_id`, `cf_dataset_version`, `train_row_count`, `holdout_row_count`, `num_users`, `num_movies`, `train_fraction`, `shuffle_seed`, `created_at`, and `status`.
+* Writes only final objects listed above; `manifest.json` last with `status=complete`.
+* Records lineage back to `snapshot_id`.
+* Job metrics are exposed via Prometheus; run is tracked in `pipeline_runs` (no MLflow required in this phase).
+
+## Phase 7: CF PyTorch Training
+
+Goal:
+Train a small dot-product collaborative filtering model on the prepared CF dataset and save learned **movie behavior embeddings** for the hybrid ranker.
+
+The CF model is **not the final recommender**. It is a **feature generator**: it learns from rating behavior and produces `movie_cf_embeddings.parquet`, which Phase 8 turns into CF features for the hybrid ranker.
 
 Build:
 
 * `jobs/train_cf`
 * MLflow as a local Docker service (tracking URI for CF experiments)
-* Shared snapshot reader utilities (load latest complete snapshot from MinIO unless `SNAPSHOT_ID` is set)
 
 ### Why CF embeddings?
 
@@ -370,37 +517,27 @@ That behavior signal is useful because content alone can miss patterns like: Mov
 ### Pipeline role
 
 ```text
-ratings_events (snapshot)
+features/cf_dataset/ (Phase 6)
   → CF model learns movie behavior embeddings
   → movie_cf_embeddings.parquet
-  → hybrid feature engineering (Phase 7) builds CF features
-  → hybrid ranker (Phase 8+) uses those features
+  → hybrid feature engineering (Phase 8) builds CF features
+  → hybrid ranker (Phase 9+) uses those features
 ```
 
 ### CF model
 
-This is a **collaborative filtering training job**, not a feature-engineering job.
+Given `user_idx` and `movie_idx`, the model learns embeddings so the dot product predicts the user's rating.
 
-Given `user_id` and `movie_id`, the model learns embeddings so the dot product predicts the user's rating.
-
-Training input is one row per rating event from the frozen snapshot `ratings_events` table:
+Training input is one row per mapped rating from `features/cf_dataset/train/`:
 
 ```text
-user_id, movie_id, rating
-```
-
-Example:
-
-```text
-user_id = 10
-movie_id = 50
-rating = 4.5
+user_idx, movie_idx, rating
 ```
 
 Internally:
 
-* `user_id` → user embedding lookup → e.g. `[0.23, 0.12, 0.44, 0.51, ...]`
-* `movie_id` → movie embedding lookup → e.g. `[0.14, 0.21, 0.10, 0.31, ...]`
+* `user_idx` → user embedding lookup → e.g. `[0.23, 0.12, 0.44, 0.51, ...]`
+* `movie_idx` → movie embedding lookup → e.g. `[0.14, 0.21, 0.10, 0.31, ...]`
 
 Prediction:
 
@@ -408,31 +545,32 @@ Prediction:
 predicted_rating = dot(user_embedding, movie_embedding)
 ```
 
-Example:
-
-```text
-predicted_rating = 3.4
-actual rating = 4.5
-loss = error between predicted and actual rating
-```
-
 Training updates user and movie embeddings to reduce that error.
 
 Embedding dimension is **64** (required by the hybrid ranker feature schema).
 
-### Train / holdout split
+### CF dataset input selection
 
-Use a **temporal split** on snapshot ratings ordered by rating timestamp:
+* Default: use the **latest complete CF dataset** (`manifest.json` with `status=complete` under `features/cf_dataset/`).
+* Override: set `CF_DATASET_VERSION` to a specific version id.
+* Lineage: record `cf_dataset_version` and `snapshot_id` in CF artifacts and MLflow.
 
-* **Train:** oldest 80% of ratings
-* **Holdout:** newest 20% of ratings (used for CF validation metrics; not used for gradient updates)
+### Training data access (streaming)
 
-Do not use holdout ratings during training.
+* Do **not** materialize all train rows in a giant `TensorDataset`.
+* Use **`IterableDataset` + `DataLoader`** over `train/part-*.parquet`.
+* Memory holds roughly: one Parquet part + one mini-batch + model weights + optimizer state.
 
-### Snapshot input selection
+### Shuffle strategy
 
-* Default: train on the **latest complete snapshot** (`manifest.json` with `status=complete`).
-* Override: set `SNAPSHOT_ID` to a specific snapshot id.
+* Do **not** run `ORDER BY random()` every epoch.
+* Phase 6 already shuffled train rows once when writing `train/`.
+* Each training epoch: shuffle **part order** and optionally shuffle **rows within each loaded part**.
+
+### Holdout evaluation (streaming)
+
+* Stream `holdout/part-*.parquet` in batches.
+* Compute running RMSE/MAE; do **not** load the entire holdout into RAM or accumulate all predictions.
 
 ### Training runtime
 
@@ -446,8 +584,8 @@ s3://cinerankml/artifacts/collaborative_filtering/
   cf_version=cf-v1-2026-06-25T122000Z/
     movie_cf_embeddings.parquet
     cf_model.pt
-    config.json
-    metrics.json
+    cf_config.json
+    cf_metrics.json
     manifest.json
 ```
 
@@ -458,20 +596,37 @@ movie_id
 cf_embedding
 ```
 
-Example:
-
-```text
-movie_id = 50
-cf_embedding = [0.14, 0.21, 0.10, 0.31, ...]
-```
-
 `cf_model.pt` stores the trained embedding model for reproducibility and re-export.
 
 Write data files first and `manifest.json` last with `status=complete`.
 
-### CF features (built in Phase 7, not Phase 6)
+Acceptance criteria:
 
-Phase 6 saves **movie-level** embeddings only. Phase 7 (`create_features`) combines them with content embeddings and metadata to build per-example hybrid features.
+* Trains on prepared `features/cf_dataset/` train parts via streaming `IterableDataset`.
+* Holdout RMSE/MAE on the newest 20% are computed by streaming holdout parts.
+* Versioned `movie_cf_embeddings.parquet` and `cf_model.pt` are saved to MinIO (`s3://cinerankml/artifacts/...`).
+* `cf_config.json`, `cf_metrics.json`, and `manifest.json` are saved.
+* CF run is logged to MLflow (local Docker tracking server) with `cf_version`, `cf_dataset_version`, and `snapshot_id`.
+
+## Phase 8: Feature Generation
+
+Goal:
+Create hybrid ranker train/validation/test datasets by combining content embeddings, CF embeddings, and metadata into fixed-size feature vectors.
+
+Build:
+
+* `jobs/create_features`
+* Shared feature utilities in `packages/common/features`
+* DuckDB over MinIO snapshot Parquet for user-level aggregations (e.g. building `user_cf_profile` inputs)
+
+### CF features from Phase 7 artifacts
+
+Phase 8 reads frozen `movie_cf_embeddings.parquet` (not the live CF model) and builds these behavior-based features per row:
+
+* `user_cf_profile` `[64]`
+* `candidate_cf_embedding` `[64]`
+* `cf_cosine_similarity` `[1]`
+* `user_cf_profile * candidate_cf_embedding` `[64]`
 
 For each recommendation row (user profile + candidate movie):
 
@@ -499,54 +654,18 @@ Candidate movie 50:
   elementwise_product = user_cf_profile * candidate_cf_embedding
 ```
 
-These four CF feature groups are slots 5–8 in the hybrid ranker input vector (total `1356` dims; see Phase 7 / ML training rules).
-
-### Inference (Phase 9+)
-
-Do **not** call the CF model directly at online inference. Training already produced `movie_cf_embeddings.parquet`. At request time:
-
-1. Load/fetch saved movie CF embeddings for movies the user rated → build `user_cf_profile`
-2. Load/fetch `candidate_cf_embedding` for each candidate movie
-3. Compute `cf_cosine_similarity` and elementwise product
-4. Pass those CF features into the hybrid ranker
-
-Acceptance criteria:
-
-* CF model trains on the oldest 80% of snapshot ratings (temporal split).
-* Holdout RMSE/MAE on the newest 20% are logged.
-* Versioned `movie_cf_embeddings.parquet` and `cf_model.pt` are saved to MinIO (`s3://cinerankml/artifacts/...`).
-* `config.json`, `metrics.json`, and `manifest.json` are saved.
-* CF run is logged to MLflow (local Docker tracking server).
-
-## Phase 7: Feature Generation
-
-Goal:
-Create hybrid ranker train/validation/test datasets by combining content embeddings, CF embeddings, and metadata into fixed-size feature vectors.
-
-Build:
-
-* `jobs/create_features`
-* Shared feature utilities in `packages/common/features`
-
-### CF features from Phase 6 artifacts
-
-Phase 7 reads frozen `movie_cf_embeddings.parquet` (not the live CF model) and builds these behavior-based features per row:
-
-* `user_cf_profile` `[64]`
-* `candidate_cf_embedding` `[64]`
-* `cf_cosine_similarity` `[1]`
-* `user_cf_profile * candidate_cf_embedding` `[64]`
+These four CF feature groups are slots 5–8 in the hybrid ranker input vector (total `1356` dims; see ML training rules).
 
 Together with content-based features (user/candidate content embeddings, cosine similarity, elementwise product), behavior features, and metadata features, each example becomes a **1356-dimensional** input vector for the hybrid ranker.
 
 Acceptance criteria:
 
 * Uses frozen snapshot, content embeddings, and CF embeddings.
-* Outputs train/validation/test datasets to MinIO (`s3://cinerankml/features/...`).
+* Outputs train/validation/test datasets to MinIO (`s3://cinerankml/features/hybrid_ranker/...`).
 * Each feature vector has input dimension `1356`.
 * Dataset manifest records `snapshot_id`, `cf_version`, `content_embedding_version`, and `feature_schema_version`.
 
-## Phase 8: Hybrid Model Training and Evaluation
+## Phase 9: Hybrid Model Training and Evaluation
 
 Goal:
 Train and evaluate the hybrid neural reranker.
@@ -565,7 +684,7 @@ Acceptance criteria:
 * Model artifacts are saved to MinIO (`s3://cinerankml/models/...`).
 * Metrics and artifacts are logged to MLflow.
 
-## Phase 9: FastAPI Inference
+## Phase 10: FastAPI Inference
 
 Goal:
 Serve online recommendations.
@@ -573,6 +692,15 @@ Serve online recommendations.
 Build:
 
 * `apps/recommender-api`
+
+### Inference (Phase 10+)
+
+Do **not** call the CF model directly at online inference. Training already produced `movie_cf_embeddings.parquet`. At request time:
+
+1. Load/fetch saved movie CF embeddings for movies the user rated → build `user_cf_profile`
+2. Load/fetch `candidate_cf_embedding` for each candidate movie
+3. Compute `cf_cosine_similarity` and elementwise product
+4. Pass those CF features into the hybrid ranker
 
 Acceptance criteria:
 
@@ -584,14 +712,14 @@ Acceptance criteria:
 * Recommendation impressions are logged to Postgres.
 * API metrics are exposed.
 
-## Phase 10: MLflow and Monitoring Polish
+## Phase 11: MLflow and Monitoring Polish
 
 Goal:
 Make the project production-style and observable.
 
 Build:
 
-* MLflow model aliases: `main` and `candidate` (basic MLflow tracking starts in Phase 6).
+* MLflow model aliases: `main` and `candidate` (basic MLflow tracking starts in Phase 7).
 * Prometheus scrape configs.
 * Grafana dashboards.
 * Basic online experiment monitoring.

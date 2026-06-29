@@ -10,6 +10,7 @@ class RatingsEvent(Base):
     __tablename__ = "ratings_events"
     __table_args__ = (
         Index("ix_ratings_events_user_id_rating_timestamp", "user_id", "rating_timestamp"),
+        Index("ix_ratings_events_rating_timestamp_id", "rating_timestamp", "id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

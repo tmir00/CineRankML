@@ -5,11 +5,18 @@ from __future__ import annotations
 import json
 import boto3
 
-from typing import Any
 from pathlib import Path
+from typing import Any, Protocol
 from botocore.client import BaseClient
 from botocore.exceptions import ClientError
-from common.config.settings import SnapshotSettings
+
+
+class S3ConnectionSettings(Protocol):
+    """Minimal settings shape required to build a boto3 S3 client."""
+
+    s3_endpoint_url: str
+    s3_access_key: str
+    s3_secret_key: str
 
 
 def ensure_bucket_exists(client: BaseClient, bucket: str) -> None:
@@ -26,12 +33,12 @@ def ensure_bucket_exists(client: BaseClient, bucket: str) -> None:
         client.create_bucket(Bucket=bucket)
 
 
-def create_s3_client(settings: SnapshotSettings) -> BaseClient:
+def create_s3_client(settings: S3ConnectionSettings) -> BaseClient:
     """
     Create a boto3 S3 client pointed at MinIO.
 
     ============================ Arguments ============================
-    settings: Snapshot job configuration with endpoint and credentials.
+    settings: Job configuration with endpoint and credentials.
 
     ============================ Returns ============================
     A boto3 S3 client.
@@ -75,6 +82,95 @@ def manifest_object_key(snapshot_id: str) -> str:
     return f"{snapshot_prefix(snapshot_id)}manifest.json"
 
 
+def cf_dataset_prefix(cf_dataset_version: str) -> str:
+    """Return the object prefix for one CF dataset version."""
+    return f"features/cf_dataset/cf_dataset_version={cf_dataset_version}/"
+
+
+def cf_dataset_train_prefix(cf_dataset_version: str) -> str:
+    """Return the object prefix for shuffled train parts."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}train/"
+
+
+def cf_dataset_holdout_prefix(cf_dataset_version: str) -> str:
+    """Return the object prefix for time-ordered holdout parts."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}holdout/"
+
+
+def cf_dataset_user_map_object_key(cf_dataset_version: str) -> str:
+    """Return the user_id_map.parquet object key for one CF dataset version."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}user_id_map.parquet"
+
+
+def cf_dataset_movie_map_object_key(cf_dataset_version: str) -> str:
+    """Return the movie_id_map.parquet object key for one CF dataset version."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}movie_id_map.parquet"
+
+
+def cf_dataset_train_part_object_key(cf_dataset_version: str, part_index: int) -> str:
+    """Return one train part object key for a CF dataset version."""
+    return f"{cf_dataset_train_prefix(cf_dataset_version)}part-{part_index:05d}.parquet"
+
+
+def cf_dataset_holdout_part_object_key(cf_dataset_version: str, part_index: int) -> str:
+    """Return one holdout part object key for a CF dataset version."""
+    return f"{cf_dataset_holdout_prefix(cf_dataset_version)}part-{part_index:05d}.parquet"
+
+
+def cf_dataset_manifest_object_key(cf_dataset_version: str) -> str:
+    """Return the manifest.json object key for one CF dataset version."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}manifest.json"
+
+
+def list_common_prefixes(client: BaseClient, bucket: str, prefix: str) -> list[str]:
+    """
+    List the immediate child folder name prefixes under one S3 prefix.
+    E.g: Under snapshots, we list snapshot_id=2026-06-25T120000Z/, snapshot_id=2026-06-26T120000Z/, etc.
+
+    Do this by:
+    1. Paginating list_objects_v2 with delimiter=/.
+    2. Collecting CommonPrefixes entries.
+
+    ============================ Arguments ============================
+    client: The boto3 S3 client.
+    bucket: Source bucket name.
+    prefix: Parent prefix to list (should end with / when listing children).
+
+    ============================ Returns ============================
+    Sorted list of child prefix strings.
+    """
+    # Normalize the prefix to end with a trailing slash.
+    normalized_prefix = prefix if prefix.endswith("/") else f"{prefix}/"
+    # Initialize an empty list to store the child prefix strings.
+    prefixes: list[str] = []
+    # Initialize a continuation token to None.
+    continuation_token: str | None = None
+
+    # Loop until we have no more pages to fetch.
+    while True:
+        kwargs: dict[str, Any] = {
+            "Bucket": bucket,
+            "Prefix": normalized_prefix,
+            "Delimiter": "/",
+        }
+        # If we have a continuation token, add it to the kwargs.
+        if continuation_token:
+            kwargs["ContinuationToken"] = continuation_token
+
+        # List the objects in the bucket under the normalized prefix.
+        response = client.list_objects_v2(**kwargs)
+        for entry in response.get("CommonPrefixes", []):
+            prefixes.append(entry["Prefix"])
+
+        # If we have no more pages to fetch, break out of the loop.
+        if not response.get("IsTruncated"):
+            break
+        # Set the continuation token to the next token from the response.
+        continuation_token = response.get("NextContinuationToken")
+
+    return sorted(prefixes)
+
+
 def upload_file(client: BaseClient, bucket: str, key: str, local_path: Path) -> None:
     """
     Upload one local file to S3.
@@ -100,3 +196,24 @@ def put_json(client: BaseClient, bucket: str, key: str, payload: Any) -> None:
     """
     body = json.dumps(payload, default=str, indent=2).encode("utf-8")
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+
+
+def get_json(client: BaseClient, bucket: str, key: str) -> Any:
+    """
+    Download and parse one JSON object from S3.
+    This is used to download and read the manifest.json file from S3.
+
+    ============================ Arguments ============================
+    client: The boto3 S3 client.
+    bucket: Source bucket name.
+    key: Object key inside the bucket.
+
+    ============================ Returns ============================
+    The parsed JSON payload (usually a dict).
+    """
+    # Download the object from S3.
+    response = client.get_object(Bucket=bucket, Key=key)
+    # Read the body of the object.
+    body = response["Body"].read()
+    # Parse the body as JSON and return the result.
+    return json.loads(body)

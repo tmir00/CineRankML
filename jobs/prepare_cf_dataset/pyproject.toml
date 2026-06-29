@@ -1,0 +1,22 @@
+[project]
+name = "prepare-cf-dataset"
+version = "0.1.0"
+description = "Prepare collaborative filtering train/holdout datasets from MinIO snapshots"
+requires-python = ">=3.12"
+dependencies = [
+    "common",
+    "duckdb>=1.0",
+]
+
+[project.scripts]
+prepare-cf-dataset = "prepare_cf_dataset.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prepare_cf_dataset"]
+
+[tool.uv.sources]
+common = { workspace = true }
