@@ -267,6 +267,14 @@ class CfDatasetSettings(BaseSettings):
         default=0.8,
         validation_alias=AliasChoices("CF_TRAIN_FRACTION", "TRAIN_FRACTION"),
     )
+    validation_fraction: float = Field(
+        default=0.1,
+        validation_alias=AliasChoices("CF_VALIDATION_FRACTION"),
+    )
+    test_fraction: float = Field(
+        default=0.1,
+        validation_alias=AliasChoices("CF_TEST_FRACTION"),
+    )
     cf_part_row_limit: int = 500_000
     job_name: str = "prepare_cf_dataset"
     metrics_job_name: str = Field(
@@ -283,7 +291,68 @@ class CfDatasetSettings(BaseSettings):
             return None
         return value
 
+    @model_validator(mode="after")
+    def _split_fractions_sum_to_one(self) -> Self:
+        """Train, validation, and test fractions must sum to 1.0."""
+        total = self.train_fraction + self.validation_fraction + self.test_fraction
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                "CF split fractions must sum to 1.0 "
+                f"(train={self.train_fraction}, validation={self.validation_fraction}, "
+                f"test={self.test_fraction})"
+            )
+        return self
+
 
 def get_cf_dataset_settings() -> CfDatasetSettings:
     return CfDatasetSettings()
+
+
+class CfTrainingSettings(BaseSettings):
+    """CF PyTorch training batch job, MinIO, MLflow, and metrics settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    cf_dataset_version: str | None = None
+    cf_version: str | None = None
+    embedding_dim: int = Field(default=64, validation_alias=AliasChoices("CF_EMBEDDING_DIM"))
+    num_epochs: int = Field(default=20, validation_alias=AliasChoices("CF_EPOCHS"))
+    batch_size: int = Field(default=4096, validation_alias=AliasChoices("CF_BATCH_SIZE"))
+    learning_rate: float = Field(default=0.01, validation_alias=AliasChoices("CF_LEARNING_RATE"))
+    early_stopping_patience: int = Field(
+        default=3,
+        validation_alias=AliasChoices("CF_EARLY_STOPPING_PATIENCE"),
+    )
+    shuffle_seed: int = Field(default=42, validation_alias=AliasChoices("CF_SHUFFLE_SEED"))
+    device: str = Field(default="auto", validation_alias=AliasChoices("CF_DEVICE"))
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices("MLFLOW_TRACKING_URI"),
+    )
+    mlflow_experiment_name: str = Field(
+        default="collaborative_filtering",
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME"),
+    )
+    job_name: str = "train_cf"
+    metrics_job_name: str = Field(
+        default="train_cf",
+        validation_alias=AliasChoices("CF_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("cf_dataset_version", "cf_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """ Set unset env values as None instead of an empty string. """
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_cf_training_settings() -> CfTrainingSettings:
+    return CfTrainingSettings()
 

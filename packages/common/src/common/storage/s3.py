@@ -92,9 +92,14 @@ def cf_dataset_train_prefix(cf_dataset_version: str) -> str:
     return f"{cf_dataset_prefix(cf_dataset_version)}train/"
 
 
-def cf_dataset_holdout_prefix(cf_dataset_version: str) -> str:
-    """Return the object prefix for time-ordered holdout parts."""
-    return f"{cf_dataset_prefix(cf_dataset_version)}holdout/"
+def cf_dataset_validation_prefix(cf_dataset_version: str) -> str:
+    """Return the object prefix for time-ordered validation parts."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}validation/"
+
+
+def cf_dataset_test_prefix(cf_dataset_version: str) -> str:
+    """Return the object prefix for locked test parts."""
+    return f"{cf_dataset_prefix(cf_dataset_version)}test/"
 
 
 def cf_dataset_user_map_object_key(cf_dataset_version: str) -> str:
@@ -112,14 +117,54 @@ def cf_dataset_train_part_object_key(cf_dataset_version: str, part_index: int) -
     return f"{cf_dataset_train_prefix(cf_dataset_version)}part-{part_index:05d}.parquet"
 
 
-def cf_dataset_holdout_part_object_key(cf_dataset_version: str, part_index: int) -> str:
-    """Return one holdout part object key for a CF dataset version."""
-    return f"{cf_dataset_holdout_prefix(cf_dataset_version)}part-{part_index:05d}.parquet"
+def cf_dataset_validation_part_object_key(cf_dataset_version: str, part_index: int) -> str:
+    """Return one validation part object key for a CF dataset version."""
+    return f"{cf_dataset_validation_prefix(cf_dataset_version)}part-{part_index:05d}.parquet"
+
+
+def cf_dataset_test_part_object_key(cf_dataset_version: str, part_index: int) -> str:
+    """Return one test part object key for a CF dataset version."""
+    return f"{cf_dataset_test_prefix(cf_dataset_version)}part-{part_index:05d}.parquet"
 
 
 def cf_dataset_manifest_object_key(cf_dataset_version: str) -> str:
     """Return the manifest.json object key for one CF dataset version."""
     return f"{cf_dataset_prefix(cf_dataset_version)}manifest.json"
+
+
+def cf_artifact_prefix(cf_version: str) -> str:
+    """Return the object prefix for one CF training artifact version."""
+    return f"artifacts/collaborative_filtering/cf_version={cf_version}/"
+
+
+def cf_movie_embeddings_object_key(cf_version: str) -> str:
+    """Return the movie_cf_embeddings.parquet object key for one CF version."""
+    return f"{cf_artifact_prefix(cf_version)}movie_cf_embeddings.parquet"
+
+
+def cf_model_object_key(cf_version: str) -> str:
+    """Return the cf_model.pt object key for one CF version."""
+    return f"{cf_artifact_prefix(cf_version)}cf_model.pt"
+
+
+def cf_config_object_key(cf_version: str) -> str:
+    """Return the cf_config.json object key for one CF version."""
+    return f"{cf_artifact_prefix(cf_version)}cf_config.json"
+
+
+def cf_metrics_object_key(cf_version: str) -> str:
+    """Return the cf_metrics.json object key for one CF version."""
+    return f"{cf_artifact_prefix(cf_version)}cf_metrics.json"
+
+
+def cf_training_curve_object_key(cf_version: str) -> str:
+    """Return the training_curve.png object key for one CF version."""
+    return f"{cf_artifact_prefix(cf_version)}training_curve.png"
+
+
+def cf_artifact_manifest_object_key(cf_version: str) -> str:
+    """Return the manifest.json object key for one CF artifact version."""
+    return f"{cf_artifact_prefix(cf_version)}manifest.json"
 
 
 def list_common_prefixes(client: BaseClient, bucket: str, prefix: str) -> list[str]:
@@ -196,6 +241,20 @@ def put_json(client: BaseClient, bucket: str, key: str, payload: Any) -> None:
     """
     body = json.dumps(payload, default=str, indent=2).encode("utf-8")
     client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+
+
+def download_file(client: BaseClient, bucket: str, key: str, local_path: Path) -> None:
+    """
+    Download one S3 object to a local file path.
+
+    ============================ Arguments ============================
+    client: The boto3 S3 client.
+    bucket: Source bucket name.
+    key: Object key inside the bucket.
+    local_path: Destination path on the local filesystem.
+    """
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    client.download_file(bucket, key, str(local_path))
 
 
 def get_json(client: BaseClient, bucket: str, key: str) -> Any:

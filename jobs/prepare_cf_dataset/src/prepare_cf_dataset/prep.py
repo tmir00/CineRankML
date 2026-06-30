@@ -1,4 +1,4 @@
-"""DuckDB pipeline that builds CF train/holdout datasets from snapshot Parquet."""
+"""DuckDB pipeline that builds CF train/validation/test datasets from snapshot Parquet."""
 
 from __future__ import annotations
 
@@ -9,11 +9,12 @@ from typing import Callable
 from datetime import UTC, datetime
 from botocore.client import BaseClient
 from common.storage.s3 import (
-    cf_dataset_holdout_part_object_key,
     cf_dataset_manifest_object_key,
     cf_dataset_movie_map_object_key,
+    cf_dataset_test_part_object_key,
     cf_dataset_train_part_object_key,
     cf_dataset_user_map_object_key,
+    cf_dataset_validation_part_object_key,
     put_json,
 )
 from dataclasses import dataclass, field
@@ -34,11 +35,13 @@ class CfDatasetPrepStats:
     snapshot_id: str
     cf_dataset_version: str
     train_row_count: int = 0
-    holdout_row_count: int = 0
+    validation_row_count: int = 0
+    test_row_count: int = 0
     num_users: int = 0
     num_movies: int = 0
     train_parts: list[CfDatasetPartEntry] = field(default_factory=list)
-    holdout_parts: list[CfDatasetPartEntry] = field(default_factory=list)
+    validation_parts: list[CfDatasetPartEntry] = field(default_factory=list)
+    test_parts: list[CfDatasetPartEntry] = field(default_factory=list)
     user_id_map_key: str = ""
     movie_id_map_key: str = ""
 
@@ -63,9 +66,16 @@ def _s3_uri(bucket: str, object_key: str) -> str:
     return f"s3://{bucket}/{object_key}"
 
 
-def _write_partitioned_split(conn: duckdb.DuckDBPyConnection, bucket: str, cf_dataset_version: str, *,
-                                source_table: str, order_clause: str, part_key_builder: Callable[[str, int], str], 
-                                    part_row_limit: int) -> list[CfDatasetPartEntry]:
+def _write_partitioned_split(
+    conn: duckdb.DuckDBPyConnection,
+    bucket: str,
+    cf_dataset_version: str,
+    *,
+    source_table: str,
+    order_clause: str,
+    part_key_builder: Callable[[str, int], str],
+    part_row_limit: int,
+) -> list[CfDatasetPartEntry]:
     """
     Take one DuckDB table, split it into multiple Parquet files, and upload them to MinIO.
 
@@ -85,10 +95,8 @@ def _write_partitioned_split(conn: duckdb.DuckDBPyConnection, bucket: str, cf_da
     ============================ Returns ============================
     Metadata for each written Parquet part file.
     """
-    # Create a temporary parts table to store the part indices.
     parts_table = f"{source_table}_parts"
     conn.execute(f"DROP TABLE IF EXISTS {parts_table}")
-    # Assign each row a part index such that first N rows go to part 0, next N rows go to part 1, etc.
     conn.execute(
         f"""
         CREATE TABLE {parts_table} AS
@@ -101,20 +109,14 @@ def _write_partitioned_split(conn: duckdb.DuckDBPyConnection, bucket: str, cf_da
         """
     )
 
-    # Count the number of parts.
     part_count = conn.execute(
         f"SELECT COALESCE(MAX(part_idx), -1) + 1 FROM {parts_table}"
     ).fetchone()[0]
     parts: list[CfDatasetPartEntry] = []
 
-    # Write each part to S3/MinIO as Parquet.
     for part_index in range(part_count):
-        
-        # Build S3/MinIO path for the part.
         object_key = part_key_builder(cf_dataset_version, part_index)
         uri = _s3_uri(bucket, object_key)
-
-        # Copy the part to S3/MinIO as Parquet.
         conn.execute(
             f"""
             COPY (
@@ -128,30 +130,24 @@ def _write_partitioned_split(conn: duckdb.DuckDBPyConnection, bucket: str, cf_da
         row_count = conn.execute(
             f"SELECT COUNT(*) FROM {parts_table} WHERE part_idx = {part_index}"
         ).fetchone()[0]
-
-        # Add the part to the list of parts.   
         parts.append(CfDatasetPartEntry(object_key=object_key, row_count=row_count))
 
-    # Drop the temporary parts table.
     conn.execute(f"DROP TABLE IF EXISTS {parts_table}")
-
-    # Return the list of parts.
     return parts
 
 
-def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipeline_run_id: str) -> CfDatasetPrepStats:
+def run_cf_dataset_prep(
+    client: BaseClient,
+    settings: CfDatasetSettings,
+    pipeline_run_id: str,
+) -> CfDatasetPrepStats:
     """
     Build a versioned CF dataset from snapshot Parquet on MinIO.
 
-    - Take raw snapshot Parquet files from MinIO,
-    - Use DuckDB to transform them into a training-ready collaborative filtering dataset,
-    - Write the output back to MinIO,
-    - Then write a manifest.json saying the dataset is complete.
-
     Do this by:
     1. Resolving the source snapshot and opening a DuckDB connection.
-    2. Running temporal split, id mapping, and deterministic train shuffle in memory.
-    3. Writing maps, train parts, holdout parts, and manifest.json last.
+    2. Running temporal 80/10/10 split, id mapping, and deterministic train shuffle.
+    3. Writing maps, train/validation/test parts, and manifest.json last.
 
     ============================ Arguments ============================
     client: boto3 S3 client for snapshot resolution and manifest upload.
@@ -161,23 +157,22 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
     ============================ Returns ============================
     CfDatasetPrepStats with row counts and part metadata.
     """
-    # Resolve which snapshot and dataset version to use
     snapshot_id = resolve_snapshot_id(client, settings.s3_bucket, settings.snapshot_id)
     cf_dataset_version = resolve_cf_dataset_version(settings)
     created_at = utc_now()
     stats = CfDatasetPrepStats(snapshot_id=snapshot_id, cf_dataset_version=cf_dataset_version)
 
-    # Resolve which snapshot and dataset version to use
     ratings_glob = snapshot_table_glob_uri(settings.s3_bucket, snapshot_id, "ratings_events")
     catalog_glob = snapshot_table_glob_uri(settings.s3_bucket, snapshot_id, "catalog_movies")
 
-    # Open DuckDB and configure MinIO/S3 access
     conn = create_duckdb_connection()
     configure_duckdb_s3(conn, settings)
 
+    train_fraction = settings.train_fraction
+    validation_fraction = settings.validation_fraction
+    validation_upper = train_fraction + validation_fraction
+
     try:
-        # Stage 1: load snapshot inputs.
-        # Load the ratings_events table from the snapshot into ratings DuckDB table.
         conn.execute(
             f"""
             CREATE TABLE ratings AS
@@ -185,7 +180,6 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             FROM read_parquet('{ratings_glob}')
             """
         )
-        # Load the catalog_movies table from the snapshot into catalog DuckDB table.
         conn.execute(
             f"""
             CREATE TABLE catalog AS
@@ -194,7 +188,6 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             """
         )
 
-        # Count the number of ratings and catalog movies.
         raw_rating_count = conn.execute("SELECT COUNT(*) FROM ratings").fetchone()[0]
         catalog_movie_count = conn.execute("SELECT COUNT(*) FROM catalog").fetchone()[0]
         logger.info(
@@ -206,8 +199,7 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             },
         )
 
-        # Stage 2: temporal train/holdout split on rating_timestamp, id.
-        # Sort ratings by timestamp and id, then split into train and holdout sets.
+        # Stage 2: temporal train/validation/test split on rating_timestamp, id.
         conn.execute(
             f"""
             CREATE TABLE split_ratings AS
@@ -229,15 +221,14 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
                 rating_timestamp,
                 id,
                 CASE
-                    WHEN rn <= CAST(FLOOR(total * {settings.train_fraction}) AS BIGINT) THEN 'train'
-                    ELSE 'holdout'
+                    WHEN rn <= CAST(FLOOR(total * {train_fraction}) AS BIGINT) THEN 'train'
+                    WHEN rn <= CAST(FLOOR(total * {validation_upper}) AS BIGINT) THEN 'validation'
+                    ELSE 'test'
                 END AS split
             FROM numbered
             """
         )
 
-        # Stage 3: build user and movie id maps (train users only; all catalog movies).
-        # This is for the embedding lookup tables.
         conn.execute(
             """
             CREATE TABLE user_id_map AS
@@ -261,12 +252,9 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             """
         )
 
-        # Count the number of users and movies.
         stats.num_users = conn.execute("SELECT COUNT(*) FROM user_id_map").fetchone()[0]
         stats.num_movies = conn.execute("SELECT COUNT(*) FROM movie_id_map").fetchone()[0]
 
-        # Stage 4: join ratings to maps so that we can use our mapped ids for training.
-        # Also drop ratings for movies missing from catalog.
         conn.execute(
             """
             CREATE TABLE train_mapped AS
@@ -286,7 +274,7 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
         )
         conn.execute(
             """
-            CREATE TABLE holdout_mapped AS
+            CREATE TABLE validation_mapped AS
             SELECT
                 u.user_idx,
                 m.movie_idx,
@@ -296,14 +284,29 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             FROM split_ratings s
             INNER JOIN user_id_map u ON s.user_id = u.user_id
             INNER JOIN movie_id_map m ON s.movie_id = m.movie_id
-            WHERE s.split = 'holdout'
+            WHERE s.split = 'validation'
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE test_mapped AS
+            SELECT
+                u.user_idx,
+                m.movie_idx,
+                s.rating,
+                s.rating_timestamp,
+                s.id
+            FROM split_ratings s
+            INNER JOIN user_id_map u ON s.user_id = u.user_id
+            INNER JOIN movie_id_map m ON s.movie_id = m.movie_id
+            WHERE s.split = 'test'
             """
         )
 
-        # Log dropped ratings that could not be mapped to catalog movies or train users.
         mapped_train_count = conn.execute("SELECT COUNT(*) FROM train_mapped").fetchone()[0]
-        mapped_holdout_count = conn.execute("SELECT COUNT(*) FROM holdout_mapped").fetchone()[0]
-        dropped_count = (raw_rating_count - mapped_train_count - mapped_holdout_count)
+        mapped_validation_count = conn.execute("SELECT COUNT(*) FROM validation_mapped").fetchone()[0]
+        mapped_test_count = conn.execute("SELECT COUNT(*) FROM test_mapped").fetchone()[0]
+        dropped_count = raw_rating_count - mapped_train_count - mapped_validation_count - mapped_test_count
         if dropped_count > 0:
             logger.warning(
                 "Dropped ratings that could not be mapped to catalog movies or train users",
@@ -313,7 +316,6 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
                 },
             )
 
-        # Stage 5: deterministic train shuffle; holdout stays time-ordered.
         conn.execute(
             f"""
             CREATE TABLE train_shuffled AS
@@ -333,15 +335,14 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
         )
 
         stats.train_row_count = mapped_train_count
-        stats.holdout_row_count = mapped_holdout_count
+        stats.validation_row_count = mapped_validation_count
+        stats.test_row_count = mapped_test_count
 
-        # Stage 6: write maps and partitioned split outputs.
         user_map_key = cf_dataset_user_map_object_key(cf_dataset_version)
         movie_map_key = cf_dataset_movie_map_object_key(cf_dataset_version)
         stats.user_id_map_key = user_map_key
         stats.movie_id_map_key = movie_map_key
 
-        # Write user and movie id maps to S3/MinIO as Parquet.
         conn.execute(
             f"COPY (SELECT user_id, user_idx FROM user_id_map ORDER BY user_idx) "
             f"TO '{_s3_uri(settings.s3_bucket, user_map_key)}' (FORMAT PARQUET)"
@@ -351,7 +352,6 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             f"TO '{_s3_uri(settings.s3_bucket, movie_map_key)}' (FORMAT PARQUET)"
         )
 
-        # Write train and holdout Parquet parts
         stats.train_parts = _write_partitioned_split(
             conn,
             settings.s3_bucket,
@@ -361,17 +361,25 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             part_key_builder=cf_dataset_train_part_object_key,
             part_row_limit=settings.cf_part_row_limit,
         )
-        stats.holdout_parts = _write_partitioned_split(
+        stats.validation_parts = _write_partitioned_split(
             conn,
             settings.s3_bucket,
             cf_dataset_version,
-            source_table="holdout_mapped",
+            source_table="validation_mapped",
             order_clause="rating_timestamp, id",
-            part_key_builder=cf_dataset_holdout_part_object_key,
+            part_key_builder=cf_dataset_validation_part_object_key,
+            part_row_limit=settings.cf_part_row_limit,
+        )
+        stats.test_parts = _write_partitioned_split(
+            conn,
+            settings.s3_bucket,
+            cf_dataset_version,
+            source_table="test_mapped",
+            order_clause="rating_timestamp, id",
+            part_key_builder=cf_dataset_test_part_object_key,
             part_row_limit=settings.cf_part_row_limit,
         )
 
-        # Stage 7: write manifest.json last with status=complete.
         finished_at = utc_now()
         manifest = build_complete_manifest(
             snapshot_id=snapshot_id,
@@ -380,15 +388,19 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
             created_at=created_at,
             finished_at=finished_at,
             train_row_count=stats.train_row_count,
-            holdout_row_count=stats.holdout_row_count,
+            validation_row_count=stats.validation_row_count,
+            test_row_count=stats.test_row_count,
             num_users=stats.num_users,
             num_movies=stats.num_movies,
             train_fraction=settings.train_fraction,
+            validation_fraction=settings.validation_fraction,
+            test_fraction=settings.test_fraction,
             shuffle_seed=settings.cf_shuffle_seed,
             user_id_map_key=user_map_key,
             movie_id_map_key=movie_map_key,
             train_parts=stats.train_parts,
-            holdout_parts=stats.holdout_parts,
+            validation_parts=stats.validation_parts,
+            test_parts=stats.test_parts,
         )
         manifest_key = cf_dataset_manifest_object_key(cf_dataset_version)
         put_json(client, settings.s3_bucket, manifest_key, manifest.model_dump(mode="json"))
@@ -399,7 +411,8 @@ def run_cf_dataset_prep(client: BaseClient, settings: CfDatasetSettings, pipelin
                 "snapshot_id": snapshot_id,
                 "cf_dataset_version": cf_dataset_version,
                 "train_row_count": stats.train_row_count,
-                "holdout_row_count": stats.holdout_row_count,
+                "validation_row_count": stats.validation_row_count,
+                "test_row_count": stats.test_row_count,
                 "num_users": stats.num_users,
                 "num_movies": stats.num_movies,
                 "manifest_key": manifest_key,

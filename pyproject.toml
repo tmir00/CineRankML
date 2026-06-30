@@ -17,5 +17,6 @@ members = [
     "jobs/opensearch_sync",
     "jobs/snapshot_to_s3",
     "jobs/prepare_cf_dataset",
+    "jobs/train_cf",
     "services/embedder-api",
 ]

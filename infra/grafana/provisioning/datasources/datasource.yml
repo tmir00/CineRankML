@@ -1,6 +1,10 @@
 # Tell Grafana where to find the datasource (Prometheus)..
 apiVersion: 1
 
+deleteDatasources:
+  - name: MLflow Postgres
+    orgId: 1
+
 datasources: # This is the list of data sources Grafana will automatically create when it starts.
 
   - name: Prometheus          # Display name in Grafana UI

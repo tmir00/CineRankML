@@ -311,7 +311,9 @@ s3://cinerankml/
         train/
           part-00000.parquet
           part-00001.parquet
-        holdout/
+        validation/
+          part-00000.parquet
+        test/
           part-00000.parquet
         manifest.json
 
@@ -334,6 +336,7 @@ s3://cinerankml/
         cf_config.json
         cf_metrics.json
         manifest.json
+        training_curve.png
 
   models/
     hybrid_ranker/
@@ -401,12 +404,12 @@ ratings_events (snapshot, time-ordered)
 
 These steps run inside `prepare_cf_dataset` using DuckDB over `read_parquet('s3://...')`. Intermediate results are **not** written to MinIO.
 
-1. **Split** — temporal 80/20 on `rating_timestamp` (oldest → train, newest → holdout). Use `ROW_NUMBER() OVER (ORDER BY rating_timestamp, id)` or equivalent; leverage time-ordered snapshot export from Phase 5.
+1. **Split** — temporal 80/10/10 on `rating_timestamp` (oldest → train, middle → validation, newest → test). Use `ROW_NUMBER() OVER (ORDER BY rating_timestamp, id)` or equivalent; leverage time-ordered snapshot export from Phase 5.
 2. **Build maps** — `user_id_map` from train-split users only; `movie_id_map` from `catalog_movies` (all catalog movies get an index).
 3. **Join maps** — produce mapped columns: `user_idx`, `movie_idx`, `rating`.
 4. **Shuffle train once (deterministic)** — DuckDB shuffles mapped train rows **once** during prep using a fixed seed (not per training epoch). Write shuffled train parts to MinIO. The same snapshot + seed must produce the same `train/` part order and row order.
 
-Holdout is mapped but **not shuffled**.
+Validation and test are mapped but **not shuffled**.
 
 ### Deterministic train shuffle
 
@@ -428,14 +431,15 @@ Alternatively, set DuckDB's random seed before a shuffle step so the same snapsh
 
 Do **not** use non-deterministic shuffle without recording a seed — Phase 7 training depends on stable prep output for reproducibility and debugging.
 
-### Train / holdout split
+### Train / validation / test split
 
-Use a **temporal split** on snapshot ratings ordered by rating timestamp:
+Use a **temporal 80/10/10 split** on snapshot ratings ordered by rating timestamp:
 
 * **Train:** oldest 80% of ratings
-* **Holdout:** newest 20% of ratings (used for CF validation metrics in Phase 7; not used for gradient updates)
+* **Validation:** next 10% (CF early stopping and per-epoch metrics in Phase 7)
+* **Test:** newest 10% (locked for hybrid final evaluation in Phase 8+; never used in CF training or validation)
 
-Do not use holdout ratings during training.
+Do not use validation or test ratings during CF training.
 
 ### Persisted MinIO layout (final outputs only)
 
@@ -449,12 +453,14 @@ features/cf_dataset/
     train/
       part-00000.parquet         # columns: user_idx, movie_idx, rating (shuffled)
       part-00001.parquet
-    holdout/
+    validation/
       part-00000.parquet         # columns: user_idx, movie_idx, rating (time-ordered)
+    test/
+      part-00000.parquet         # columns: user_idx, movie_idx, rating (time-ordered, locked)
     manifest.json                # written last; status=complete
 ```
 
-Do **not** persist intermediate `train_raw`, `holdout_raw`, or unshuffled `train_mapped` objects.
+Do **not** persist intermediate `train_raw`, `validation_raw`, `test_raw`, or unshuffled `train_mapped` objects.
 
 ### CF dataset manifest fields
 
@@ -465,10 +471,13 @@ The `manifest.json` written last must include these fields (row counts and `shuf
 | `snapshot_id` | Source snapshot this dataset was built from |
 | `cf_dataset_version` | Version id for this CF dataset |
 | `train_row_count` | Number of rows in `train/` |
-| `holdout_row_count` | Number of rows in `holdout/` |
+| `validation_row_count` | Number of rows in `validation/` |
+| `test_row_count` | Number of rows in `test/` (locked for hybrid eval) |
 | `num_users` | Size of `user_id_map` (train-split users) |
 | `num_movies` | Size of `movie_id_map` (catalog movies) |
-| `train_fraction` | Temporal split ratio (default `0.8`) |
+| `train_fraction` | Temporal train split ratio (default `0.8`) |
+| `validation_fraction` | Temporal validation split ratio (default `0.1`) |
+| `test_fraction` | Temporal test split ratio (default `0.1`) |
 | `shuffle_seed` | Seed used for deterministic train shuffle (e.g. `42` from `CF_SHUFFLE_SEED`) |
 | `created_at` | UTC timestamp when prep started or finished |
 | `status` | `complete` or `failed` |
@@ -476,16 +485,16 @@ The `manifest.json` written last must include these fields (row counts and `shuf
 Also recommended for operational traceability:
 
 * `finished_at`, `pipeline_run_id`
-* Object keys and per-part row counts for maps and `train/` / `holdout/` parts
+* Object keys and per-part row counts for maps and `train/` / `validation/` / `test/` parts
 
 **Especially important:** `shuffle_seed` — the train shuffle must be reproducible when re-running prep on the same snapshot with the same seed.
 
 Acceptance criteria:
 
 * Reads ratings and catalog Parquet from MinIO via DuckDB.
-* Produces temporal 80/20 split consistent with this plan.
+* Produces temporal 80/10/10 split consistent with this plan.
 * Shuffles train rows deterministically using `CF_SHUFFLE_SEED` (default `42`) and records `shuffle_seed` in `manifest.json`.
-* Manifest includes `snapshot_id`, `cf_dataset_version`, `train_row_count`, `holdout_row_count`, `num_users`, `num_movies`, `train_fraction`, `shuffle_seed`, `created_at`, and `status`.
+* Manifest includes `snapshot_id`, `cf_dataset_version`, `train_row_count`, `validation_row_count`, `test_row_count`, `num_users`, `num_movies`, `train_fraction`, `validation_fraction`, `test_fraction`, `shuffle_seed`, `created_at`, and `status`.
 * Writes only final objects listed above; `manifest.json` last with `status=complete`.
 * Records lineage back to `snapshot_id`.
 * Job metrics are exposed via Prometheus; run is tracked in `pipeline_runs` (no MLflow required in this phase).
@@ -567,17 +576,80 @@ Embedding dimension is **64** (required by the hybrid ranker feature schema).
 * Phase 6 already shuffled train rows once when writing `train/`.
 * Each training epoch: shuffle **part order** and optionally shuffle **rows within each loaded part**.
 
-### Holdout evaluation (streaming)
+### Validation evaluation (streaming)
 
-* Stream `holdout/part-*.parquet` in batches.
-* Compute running RMSE/MAE; do **not** load the entire holdout into RAM or accumulate all predictions.
+* Stream `validation/part-*.parquet` in batches.
+* Compute running RMSE/MAE; do **not** load the entire validation split into RAM or accumulate all predictions.
+* Do **not** stream `test/` during CF training (test is locked for hybrid evaluation).
 
 ### Training runtime
 
 * Support **CPU and GPU** training (auto-detect or env-controlled device selection).
-* Log train loss and holdout RMSE/MAE to MLflow.
+* Log training config, per-epoch metrics, final metrics, artifacts, and lineage to MLflow.
 
-### CF artifact layout
+### MLflow tracking (CF training runs)
+
+Use experiment `collaborative_filtering` (or `MLFLOW_EXPERIMENT_NAME`). Each `train_cf` run must log **tags**, **params**, **metrics**, and **artifacts** as below.
+
+**Tags** (run search / lineage; set once at run start):
+
+| Tag | Example |
+|-----|---------|
+| `cf_version` | `cf-v1-2026-06-25T122000Z` |
+| `cf_dataset_version` | `2026-06-29T205141Z` |
+| `snapshot_id` | `2026-06-25T120000Z` |
+| `train_fraction` | `0.8` |
+| `validation_fraction` | `0.1` |
+| `test_fraction` | `0.1` |
+| `embedding_dim` | `64` |
+| `learning_rate` | `0.01` |
+| `batch_size` | `4096` |
+| `num_epochs` | `20` |
+| `optimizer` | `Adam` |
+| `loss_function` | `MSELoss` |
+| `shuffle_seed` | `42` |
+| `model_type` | `dot_product_cf` |
+
+**Per-epoch metrics** (log each epoch):
+
+| Metric | Description |
+|--------|-------------|
+| `train_loss` | Average training MSE loss for the epoch |
+| `validation_rmse` | Validation RMSE for the epoch |
+| `validation_mae` | Validation MAE for the epoch |
+| `epoch_duration_seconds` | Wall-clock time for the epoch |
+
+**Final metrics** (log once after training completes):
+
+| Metric | Description |
+|--------|-------------|
+| `best_epoch` | Epoch with lowest validation RMSE |
+| `best_validation_rmse` | Best validation RMSE across epochs |
+| `best_validation_mae` | Validation MAE at the best epoch |
+| `num_train_rows` | Train split row count (from CF dataset manifest) |
+| `num_validation_rows` | Validation split row count (from CF dataset manifest) |
+| `num_users` | User embedding table size |
+| `num_movies` | Movie embedding table size |
+| `movie_embedding_coverage` | Fraction of catalog movies with at least one train rating |
+| `default_embedding_count` | Movie embeddings still near init (optional quality check) |
+| `nan_embedding_count` | Movie embedding rows containing NaN (must be 0) |
+| `embedding_norm_mean` | Mean L2 norm of exported movie embeddings |
+| `embedding_norm_std` | Std dev of L2 norms of exported movie embeddings |
+
+**MLflow artifacts** (log to the run artifact store):
+
+| Artifact | Description |
+|----------|-------------|
+| `cf_model.pt` | Trained PyTorch checkpoint |
+| `movie_cf_embeddings.parquet` | Exported movie behavior embeddings |
+| `cf_config.json` | Full run config and lineage |
+| `cf_metrics.json` | Final metric summary JSON |
+| `manifest.json` | Copy of the MinIO commit manifest |
+| `training_curve.png` | Plot of train loss and validation RMSE/MAE vs epoch |
+
+Also write the same files to MinIO under `artifacts/collaborative_filtering/` and log them to the MLflow run artifact store (including `training_curve.png`).
+
+### CF artifact layout (MinIO)
 
 ```text
 s3://cinerankml/artifacts/collaborative_filtering/
@@ -587,6 +659,7 @@ s3://cinerankml/artifacts/collaborative_filtering/
     cf_config.json
     cf_metrics.json
     manifest.json
+    training_curve.png
 ```
 
 `movie_cf_embeddings.parquet` is the primary downstream artifact:
@@ -603,10 +676,11 @@ Write data files first and `manifest.json` last with `status=complete`.
 Acceptance criteria:
 
 * Trains on prepared `features/cf_dataset/` train parts via streaming `IterableDataset`.
-* Holdout RMSE/MAE on the newest 20% are computed by streaming holdout parts.
+* Validation RMSE/MAE are computed by streaming `validation/` parts; `test/` is never used in CF training.
 * Versioned `movie_cf_embeddings.parquet` and `cf_model.pt` are saved to MinIO (`s3://cinerankml/artifacts/...`).
 * `cf_config.json`, `cf_metrics.json`, and `manifest.json` are saved.
-* CF run is logged to MLflow (local Docker tracking server) with `cf_version`, `cf_dataset_version`, and `snapshot_id`.
+* MLflow run logs all tags, per-epoch metrics, final metrics, and artifacts listed above (including `training_curve.png`).
+* `cf_metrics.json` and MinIO `manifest.json` mirror final metric and lineage fields for non-MLflow consumers.
 
 ## Phase 8: Feature Generation
 
@@ -618,6 +692,7 @@ Build:
 * `jobs/create_features`
 * Shared feature utilities in `packages/common/features`
 * DuckDB over MinIO snapshot Parquet for user-level aggregations (e.g. building `user_cf_profile` inputs)
+* Reuse the locked `test/` split from the CF dataset manifest (`features/cf_dataset/.../test/`) for hybrid final evaluation
 
 ### CF features from Phase 7 artifacts
 

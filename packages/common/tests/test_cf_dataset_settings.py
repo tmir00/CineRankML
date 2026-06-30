@@ -26,11 +26,15 @@ def test_cf_dataset_settings_reads_documented_env_aliases(
 ) -> None:
     """Documented .env.example names should populate CfDatasetSettings."""
     monkeypatch.setenv("CF_TRAIN_FRACTION", "0.75")
+    monkeypatch.setenv("CF_VALIDATION_FRACTION", "0.15")
+    monkeypatch.setenv("CF_TEST_FRACTION", "0.1")
     monkeypatch.setenv("S3_SECRET_KEY", "secret-from-env")
     monkeypatch.setenv("CF_DATASET_METRICS_JOB_NAME", "prepare_cf_dataset_test")
 
     settings = CfDatasetSettings()
 
     assert settings.train_fraction == 0.75
+    assert settings.validation_fraction == 0.15
+    assert settings.test_fraction == 0.1
     assert settings.s3_secret_key == "secret-from-env"
     assert settings.metrics_job_name == "prepare_cf_dataset_test"

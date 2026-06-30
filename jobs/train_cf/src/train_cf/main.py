@@ -1,17 +1,18 @@
-"""Batch job entrypoint for CF dataset preparation."""
+"""Batch job entrypoint for CF PyTorch training."""
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 import uuid
-import logging
 
+from train_cf.train import run_cf_training
 from common.storage.s3 import create_s3_client
+from train_cf.version import resolve_cf_version
 from common.db.session import get_session_factory
-from common.config.settings import get_cf_dataset_settings
-from common.metrics.cf_dataset import push_cf_dataset_metrics
-from prepare_cf_dataset.prep import resolve_cf_dataset_version, run_cf_dataset_prep
+from common.config.settings import get_cf_training_settings
+from common.metrics.cf_training import push_cf_training_metrics
 from common.db.repositories.pipeline import finish_pipeline_run, start_pipeline_run
 
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def configure_logging() -> None:
-    """Set up basic structured logging for the CF dataset prep job."""
+    """Set up basic structured logging for the CF training job."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -29,32 +30,31 @@ def configure_logging() -> None:
 
 def main() -> None:
     """
-    Run the prepare_cf_dataset batch job.
+    Run the train_cf batch job.
 
     Do this by:
     1. Creating a pipeline_runs row.
-    2. Building a versioned CF dataset from the latest complete snapshot.
+    2. Training the CF model on the latest complete CF dataset.
     3. Writing manifest.json last and pushing metrics to Pushgateway.
     """
-    # Configure logging and load settings.
+    # Configure logging.
     configure_logging()
-    settings = get_cf_dataset_settings()
+
+    settings = get_cf_training_settings()
     run_id = str(uuid.uuid4())
     start = time.perf_counter()
 
-    # Initialize counters and error message.
     stats_processed = 0
     stats_failed = 0
     error_message: str | None = None
     status = "success"
-    cf_dataset_version = resolve_cf_dataset_version(settings)
-    train_row_count = 0
-    validation_row_count = 0
-    test_row_count = 0
+    cf_version = resolve_cf_version(settings)
+    best_validation_rmse: float | None = None
 
-    # Insert a new row into pipeline_runs table to mark the start of the job.
     session_factory = get_session_factory()
     session = session_factory()
+
+    # Create a pipeline_runs row to indicate the start of the CF training pipeline run.
     try:
         start_pipeline_run(session, run_id, settings.job_name)
         session.commit()
@@ -64,44 +64,40 @@ def main() -> None:
     finally:
         session.close()
 
-    # Run the CF dataset prep.
+    # Create an S3 client to access the MinIO bucket.
     try:
-        # Create an S3 client so that we can read/write to MinIO/S3.
         client = create_s3_client(settings)
-        # Run the CF dataset prep.
-        prep_stats = run_cf_dataset_prep(
+        # Train the CF model.
+        training_stats = run_cf_training(
             client,
             settings,
             pipeline_run_id=run_id,
         )
-
-        # Update the counters and error message.
-        cf_dataset_version = prep_stats.cf_dataset_version
-        train_row_count = prep_stats.train_row_count
-        validation_row_count = prep_stats.validation_row_count
-        test_row_count = prep_stats.test_row_count
-        stats_processed = train_row_count + validation_row_count + test_row_count
+        # Update the CF version and best validation RMSE.
+        cf_version = training_stats.cf_version
+        best_validation_rmse = training_stats.best_validation_rmse
+        stats_processed = 1
 
     except KeyboardInterrupt:
         status = "cancelled"
         error_message = "Interrupted by user (Ctrl+C)"
-        logger.warning("CF dataset prep interrupted")
+        logger.warning("CF training interrupted")
         raise
 
     except Exception as exc:
         status = "failure"
         error_message = str(exc)
-        logger.exception("CF dataset prep job failed")
+        logger.exception("CF training job failed")
         raise
-    
-    # When the job is done, update the pipeline_runs table and push metrics to Pushgateway.
+
+    # Update the pipeline_runs row to indicate the end of the CF training pipeline run.
     finally:
-        # Calculate the elapsed time.
         elapsed = time.perf_counter() - start
         success = status == "success"
 
-        # Open a session to the database and update the pipeline_runs table.
         session = session_factory()
+        
+        # Try to update the pipeline_runs row to indicate the end of the CF training pipeline run.
         try:
             finish_pipeline_run(
                 session,
@@ -118,29 +114,26 @@ def main() -> None:
         finally:
             session.close()
 
-        # Push metrics to Pushgateway.
-        push_cf_dataset_metrics(
+        # Push the CF training metrics to the Pushgateway.
+        push_cf_training_metrics(
             settings.pushgateway_url,
             settings.metrics_job_name,
-            cf_dataset_version,
+            cf_version,
             success=success,
             duration_seconds=elapsed,
-            train_row_count=train_row_count,
-            validation_row_count=validation_row_count,
-            test_row_count=test_row_count,
+            best_validation_rmse=best_validation_rmse,
         )
 
+        # Log the end of the CF training job.
         logger.info(
-            "CF dataset prep job finished",
+            "CF training job finished",
             extra={
                 "run_id": run_id,
-                "cf_dataset_version": cf_dataset_version,
+                "cf_version": cf_version,
                 "status": status,
                 "records_processed": stats_processed,
                 "records_failed": stats_failed,
-                "train_row_count": train_row_count,
-                "validation_row_count": validation_row_count,
-                "test_row_count": test_row_count,
+                "best_validation_rmse": best_validation_rmse,
                 "duration_seconds": elapsed,
             },
         )

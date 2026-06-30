@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 
 class CfDatasetPartEntry(BaseModel):
-    """One Parquet part file for train or holdout."""
+    """One Parquet part file for train, validation, or test."""
 
     object_key: str
     row_count: int
@@ -21,10 +21,13 @@ class CfDatasetManifest(BaseModel):
     cf_dataset_version: str
     status: Literal["complete", "failed"]
     train_row_count: int
-    holdout_row_count: int
+    validation_row_count: int
+    test_row_count: int
     num_users: int
     num_movies: int
     train_fraction: float
+    validation_fraction: float
+    test_fraction: float
     shuffle_seed: int
     created_at: datetime
     finished_at: datetime | None = None
@@ -32,4 +35,5 @@ class CfDatasetManifest(BaseModel):
     user_id_map_key: str
     movie_id_map_key: str
     train_parts: list[CfDatasetPartEntry]
-    holdout_parts: list[CfDatasetPartEntry]
+    validation_parts: list[CfDatasetPartEntry]
+    test_parts: list[CfDatasetPartEntry]

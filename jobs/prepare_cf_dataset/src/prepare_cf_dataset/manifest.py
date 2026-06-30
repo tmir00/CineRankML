@@ -7,11 +7,28 @@ from datetime import UTC, datetime
 from common.schemas.cf_dataset_manifest import CfDatasetManifest, CfDatasetPartEntry
 
 
-def build_complete_manifest(*, snapshot_id: str, cf_dataset_version: str, pipeline_run_id: str, created_at: datetime,
-                                finished_at: datetime, train_row_count: int, holdout_row_count: int, num_users: int,
-                                num_movies: int, train_fraction: float, shuffle_seed: int, user_id_map_key: str,
-                                movie_id_map_key: str, train_parts: list[CfDatasetPartEntry], 
-                                holdout_parts: list[CfDatasetPartEntry]) -> CfDatasetManifest:
+def build_complete_manifest(
+    *,
+    snapshot_id: str,
+    cf_dataset_version: str,
+    pipeline_run_id: str,
+    created_at: datetime,
+    finished_at: datetime,
+    train_row_count: int,
+    validation_row_count: int,
+    test_row_count: int,
+    num_users: int,
+    num_movies: int,
+    train_fraction: float,
+    validation_fraction: float,
+    test_fraction: float,
+    shuffle_seed: int,
+    user_id_map_key: str,
+    movie_id_map_key: str,
+    train_parts: list[CfDatasetPartEntry],
+    validation_parts: list[CfDatasetPartEntry],
+    test_parts: list[CfDatasetPartEntry],
+) -> CfDatasetManifest:
     """
     Build a complete CF dataset manifest after all parts are uploaded.
 
@@ -22,15 +39,19 @@ def build_complete_manifest(*, snapshot_id: str, cf_dataset_version: str, pipeli
     created_at: When prep started.
     finished_at: When all parts and metadata were ready.
     train_row_count: Rows written to train/.
-    holdout_row_count: Rows written to holdout/.
+    validation_row_count: Rows written to validation/.
+    test_row_count: Rows written to test/.
     num_users: Size of user_id_map.
     num_movies: Size of movie_id_map.
-    train_fraction: Temporal split ratio used for prep.
+    train_fraction: Temporal train split ratio.
+    validation_fraction: Temporal validation split ratio.
+    test_fraction: Temporal test split ratio (locked for hybrid eval).
     shuffle_seed: Seed used for deterministic train shuffle.
     user_id_map_key: S3 object key for user_id_map.parquet.
     movie_id_map_key: S3 object key for movie_id_map.parquet.
     train_parts: Metadata for each train part file.
-    holdout_parts: Metadata for each holdout part file.
+    validation_parts: Metadata for each validation part file.
+    test_parts: Metadata for each test part file.
 
     ============================ Returns ============================
     A CfDatasetManifest with status complete.
@@ -40,10 +61,13 @@ def build_complete_manifest(*, snapshot_id: str, cf_dataset_version: str, pipeli
         cf_dataset_version=cf_dataset_version,
         status="complete",
         train_row_count=train_row_count,
-        holdout_row_count=holdout_row_count,
+        validation_row_count=validation_row_count,
+        test_row_count=test_row_count,
         num_users=num_users,
         num_movies=num_movies,
         train_fraction=train_fraction,
+        validation_fraction=validation_fraction,
+        test_fraction=test_fraction,
         shuffle_seed=shuffle_seed,
         created_at=created_at,
         finished_at=finished_at,
@@ -51,7 +75,8 @@ def build_complete_manifest(*, snapshot_id: str, cf_dataset_version: str, pipeli
         user_id_map_key=user_id_map_key,
         movie_id_map_key=movie_id_map_key,
         train_parts=train_parts,
-        holdout_parts=holdout_parts,
+        validation_parts=validation_parts,
+        test_parts=test_parts,
     )
 
 
