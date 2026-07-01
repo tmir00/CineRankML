@@ -18,5 +18,6 @@ members = [
     "jobs/snapshot_to_s3",
     "jobs/prepare_cf_dataset",
     "jobs/train_cf",
+    "jobs/create_features",
     "services/embedder-api",
 ]

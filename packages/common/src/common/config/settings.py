@@ -356,3 +356,54 @@ class CfTrainingSettings(BaseSettings):
 def get_cf_training_settings() -> CfTrainingSettings:
     return CfTrainingSettings()
 
+
+class CreateFeaturesSettings(BaseSettings):
+    """Hybrid feature generation batch job and MinIO settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    snapshot_id: str | None = None
+    cf_dataset_version: str | None = None
+    cf_version: str | None = None
+    dataset_version: str | None = None
+    feature_schema_version: str = Field(
+        default="hybrid-v1",
+        validation_alias=AliasChoices("FEATURE_SCHEMA_VERSION"),
+    )
+    content_embedding_version: str = Field(
+        default="content-v1",
+        validation_alias=AliasChoices("CONTENT_EMBEDDING_VERSION", "EMBEDDING_VERSION"),
+    )
+    hybrid_part_row_limit: int = Field(
+        default=500_000,
+        validation_alias=AliasChoices("HYBRID_PART_ROW_LIMIT"),
+    )
+    job_name: str = "create_features"
+    metrics_job_name: str = Field(
+        default="create_features",
+        validation_alias=AliasChoices("HYBRID_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator(
+        "snapshot_id",
+        "cf_dataset_version",
+        "cf_version",
+        "dataset_version",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Treat empty env values as auto-generated ids."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_create_features_settings() -> CreateFeaturesSettings:
+    return CreateFeaturesSettings()
+

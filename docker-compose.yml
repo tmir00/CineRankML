@@ -533,6 +533,49 @@ services:
     networks:
       - cinerankml
 
+  create-features:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: create-features
+    container_name: cinerankml-create-features
+    profiles:
+      - ml
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      SNAPSHOT_ID: ${SNAPSHOT_ID:-}
+      CF_DATASET_VERSION: ${CF_DATASET_VERSION:-}
+      CF_VERSION: ${CF_VERSION:-}
+      DATASET_VERSION: ${DATASET_VERSION:-}
+      FEATURE_SCHEMA_VERSION: ${FEATURE_SCHEMA_VERSION:-hybrid-v1}
+      CONTENT_EMBEDDING_VERSION: ${CONTENT_EMBEDDING_VERSION:-content-v1}
+      HYBRID_PART_ROW_LIMIT: ${HYBRID_PART_ROW_LIMIT:-500000}
+      HYBRID_METRICS_JOB_NAME: ${HYBRID_METRICS_JOB_NAME:-create_features}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+      train-cf:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.22.0
     container_name: cinerankml-mlflow

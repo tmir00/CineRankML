@@ -5,7 +5,8 @@ from __future__ import annotations
 import duckdb
 
 from urllib.parse import urlparse
-from common.config.settings import CfDatasetSettings
+
+from common.storage.s3 import S3ConnectionSettings
 
 
 def _endpoint_host_port(endpoint_url: str) -> str:
@@ -32,7 +33,7 @@ def create_duckdb_connection() -> duckdb.DuckDBPyConnection:
     return conn
 
 
-def configure_duckdb_s3(conn: duckdb.DuckDBPyConnection, settings: CfDatasetSettings) -> None:
+def configure_duckdb_s3(conn: duckdb.DuckDBPyConnection, settings: S3ConnectionSettings) -> None:
     """
     Point DuckDB httpfs at the MinIO endpoint used by this project.
 

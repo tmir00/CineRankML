@@ -167,6 +167,46 @@ def cf_artifact_manifest_object_key(cf_version: str) -> str:
     return f"{cf_artifact_prefix(cf_version)}manifest.json"
 
 
+def hybrid_ranker_prefix(dataset_version: str) -> str:
+    """Return the object prefix for one hybrid ranker dataset version."""
+    return f"features/hybrid_ranker/dataset_version={dataset_version}/"
+
+
+def hybrid_ranker_train_prefix(dataset_version: str) -> str:
+    """Return the object prefix for hybrid train parts."""
+    return f"{hybrid_ranker_prefix(dataset_version)}train/"
+
+
+def hybrid_ranker_validation_prefix(dataset_version: str) -> str:
+    """Return the object prefix for hybrid validation parts."""
+    return f"{hybrid_ranker_prefix(dataset_version)}validation/"
+
+
+def hybrid_ranker_test_prefix(dataset_version: str) -> str:
+    """Return the object prefix for hybrid test parts."""
+    return f"{hybrid_ranker_prefix(dataset_version)}test/"
+
+
+def hybrid_ranker_train_part_object_key(dataset_version: str, part_index: int) -> str:
+    """Return one hybrid train part object key."""
+    return f"{hybrid_ranker_train_prefix(dataset_version)}part-{part_index:05d}.parquet"
+
+
+def hybrid_ranker_validation_part_object_key(dataset_version: str, part_index: int) -> str:
+    """Return one hybrid validation part object key."""
+    return f"{hybrid_ranker_validation_prefix(dataset_version)}part-{part_index:05d}.parquet"
+
+
+def hybrid_ranker_test_part_object_key(dataset_version: str, part_index: int) -> str:
+    """Return one hybrid test part object key."""
+    return f"{hybrid_ranker_test_prefix(dataset_version)}part-{part_index:05d}.parquet"
+
+
+def hybrid_ranker_manifest_object_key(dataset_version: str) -> str:
+    """Return the manifest.json object key for one hybrid ranker dataset version."""
+    return f"{hybrid_ranker_prefix(dataset_version)}manifest.json"
+
+
 def list_common_prefixes(client: BaseClient, bucket: str, prefix: str) -> list[str]:
     """
     List the immediate child folder name prefixes under one S3 prefix.
