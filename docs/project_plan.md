@@ -764,6 +764,10 @@ Acceptance criteria:
 Goal:
 Serve online recommendations.
 
+### Todos
+
+* [ ] **Fix MLflow artifacts not showing in UI (version mismatch).** Job containers use MLflow client 3.x (`mlflow>=2.22` resolves to 3.14 in `uv.lock`) while Compose runs `ghcr.io/mlflow/mlflow:v2.22.0`. Metrics/tags work; artifact upload/UI does not. Align versions: pin client to `mlflow>=2.22,<3` **or** upgrade the `mlflow` service image to 3.x, rebuild job images, re-run `train-hybrid-ranker`, and confirm Artifacts tab shows `hybrid_ranker_model.pt`, `model_config.json`, `training_metrics.json`, `training_curve.png`.
+
 Build:
 
 * `apps/recommender-api`

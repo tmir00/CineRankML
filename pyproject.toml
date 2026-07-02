@@ -19,5 +19,7 @@ members = [
     "jobs/prepare_cf_dataset",
     "jobs/train_cf",
     "jobs/create_features",
+    "jobs/train_hybrid_ranker",
+    "jobs/evaluate_model",
     "services/embedder-api",
 ]

@@ -576,6 +576,99 @@ services:
     networks:
       - cinerankml
 
+  train-hybrid-ranker:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: train-hybrid-ranker
+    container_name: cinerankml-train-hybrid-ranker
+    profiles:
+      - ml
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME_HYBRID:-hybrid_ranker}
+      DATASET_VERSION: ${DATASET_VERSION:-}
+      MODEL_VERSION: ${MODEL_VERSION:-}
+      HYBRID_EPOCHS: ${HYBRID_EPOCHS:-20}
+      HYBRID_BATCH_SIZE: ${HYBRID_BATCH_SIZE:-4096}
+      HYBRID_LEARNING_RATE: ${HYBRID_LEARNING_RATE:-0.001}
+      HYBRID_DROPOUT: ${HYBRID_DROPOUT:-0.1}
+      HYBRID_EARLY_STOPPING_PATIENCE: ${HYBRID_EARLY_STOPPING_PATIENCE:-3}
+      HYBRID_SHUFFLE_SEED: ${HYBRID_SHUFFLE_SEED:-42}
+      HYBRID_DEVICE: ${HYBRID_DEVICE:-auto}
+      HYBRID_METRICS_JOB_NAME: ${HYBRID_METRICS_JOB_NAME:-train_hybrid_ranker}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+      mlflow:
+        condition: service_started
+      create-features:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
+  evaluate-model:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: evaluate-model
+    container_name: cinerankml-evaluate-model
+    profiles:
+      - ml
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME_HYBRID:-hybrid_ranker}
+      MODEL_VERSION: ${MODEL_VERSION:-}
+      DATASET_VERSION: ${DATASET_VERSION:-}
+      HYBRID_BATCH_SIZE: ${HYBRID_BATCH_SIZE:-4096}
+      HYBRID_DEVICE: ${HYBRID_DEVICE:-auto}
+      EVAL_METRICS_JOB_NAME: ${EVAL_METRICS_JOB_NAME:-evaluate_model}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+      mlflow:
+        condition: service_started
+      train-hybrid-ranker:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.22.0
     container_name: cinerankml-mlflow

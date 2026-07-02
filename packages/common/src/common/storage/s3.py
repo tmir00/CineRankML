@@ -207,13 +207,49 @@ def hybrid_ranker_manifest_object_key(dataset_version: str) -> str:
     return f"{hybrid_ranker_prefix(dataset_version)}manifest.json"
 
 
+def hybrid_ranker_model_prefix(model_version: str) -> str:
+    """Return the object prefix for one hybrid ranker model version."""
+    return f"models/hybrid_ranker/model_version={model_version}/"
+
+
+def hybrid_ranker_model_object_key(model_version: str) -> str:
+    """Return the hybrid_ranker_model.pt object key for one model version."""
+    return f"{hybrid_ranker_model_prefix(model_version)}hybrid_ranker_model.pt"
+
+
+def hybrid_ranker_model_config_object_key(model_version: str) -> str:
+    """Return the model_config.json object key for one model version."""
+    return f"{hybrid_ranker_model_prefix(model_version)}model_config.json"
+
+
+def hybrid_ranker_training_metrics_object_key(model_version: str) -> str:
+    """Return the training_metrics.json object key for one model version."""
+    return f"{hybrid_ranker_model_prefix(model_version)}training_metrics.json"
+
+
+def hybrid_ranker_test_metrics_object_key(model_version: str) -> str:
+    """Return the test_metrics.json object key for one model version."""
+    return f"{hybrid_ranker_model_prefix(model_version)}test_metrics.json"
+
+
+def hybrid_ranker_training_curve_object_key(model_version: str) -> str:
+    """Return the training_curve.png object key for one model version."""
+    return f"{hybrid_ranker_model_prefix(model_version)}training_curve.png"
+
+
+def hybrid_ranker_model_manifest_object_key(model_version: str) -> str:
+    """Return the manifest.json object key for one hybrid ranker model version."""
+    return f"{hybrid_ranker_model_prefix(model_version)}manifest.json"
+
+
 def list_common_prefixes(client: BaseClient, bucket: str, prefix: str) -> list[str]:
     """
     List the immediate child folder name prefixes under one S3 prefix.
     E.g: Under snapshots, we list snapshot_id=2026-06-25T120000Z/, snapshot_id=2026-06-26T120000Z/, etc.
 
     Do this by:
-    1. Paginating list_objects_v2 with delimiter=/.
+    1. List folder names under the given prefix in the bucket.
+    2. For each folder, add the folder name to the list of prefixes.
     2. Collecting CommonPrefixes entries.
 
     ============================ Arguments ============================

@@ -407,3 +407,95 @@ class CreateFeaturesSettings(BaseSettings):
 def get_create_features_settings() -> CreateFeaturesSettings:
     return CreateFeaturesSettings()
 
+
+class HybridTrainingSettings(BaseSettings):
+    """Hybrid ranker PyTorch training batch job, MinIO, MLflow, and metrics settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    dataset_version: str | None = None
+    model_version: str | None = None
+    input_dim: int = Field(default=1356, validation_alias=AliasChoices("HYBRID_INPUT_DIM"))
+    hidden_dims: list[int] = Field(default_factory=lambda: [512, 256, 64])
+    dropout: float = Field(default=0.1, validation_alias=AliasChoices("HYBRID_DROPOUT"))
+    num_epochs: int = Field(default=20, validation_alias=AliasChoices("HYBRID_EPOCHS"))
+    batch_size: int = Field(default=4096, validation_alias=AliasChoices("HYBRID_BATCH_SIZE"))
+    learning_rate: float = Field(default=0.001, validation_alias=AliasChoices("HYBRID_LEARNING_RATE"))
+    early_stopping_patience: int = Field(
+        default=3,
+        validation_alias=AliasChoices("HYBRID_EARLY_STOPPING_PATIENCE"),
+    )
+    shuffle_seed: int = Field(default=42, validation_alias=AliasChoices("HYBRID_SHUFFLE_SEED"))
+    device: str = Field(default="auto", validation_alias=AliasChoices("HYBRID_DEVICE"))
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices("MLFLOW_TRACKING_URI"),
+    )
+    mlflow_experiment_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME"),
+    )
+    job_name: str = "train_hybrid_ranker"
+    metrics_job_name: str = Field(
+        default="train_hybrid_ranker",
+        validation_alias=AliasChoices("HYBRID_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("dataset_version", "model_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Set unset env values as None instead of an empty string."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_hybrid_training_settings() -> HybridTrainingSettings:
+    return HybridTrainingSettings()
+
+
+class EvaluateModelSettings(BaseSettings):
+    """Hybrid ranker evaluation batch job, MinIO, MLflow, and metrics settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    model_version: str | None = None
+    dataset_version: str | None = None
+    batch_size: int = Field(default=4096, validation_alias=AliasChoices("HYBRID_BATCH_SIZE", "EVAL_BATCH_SIZE"))
+    device: str = Field(default="auto", validation_alias=AliasChoices("HYBRID_DEVICE", "EVAL_DEVICE"))
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices("MLFLOW_TRACKING_URI"),
+    )
+    mlflow_experiment_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME"),
+    )
+    job_name: str = "evaluate_model"
+    metrics_job_name: str = Field(
+        default="evaluate_model",
+        validation_alias=AliasChoices("EVAL_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("model_version", "dataset_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Set unset env values as None instead of an empty string."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_evaluate_model_settings() -> EvaluateModelSettings:
+    return EvaluateModelSettings()
+
