@@ -22,4 +22,5 @@ members = [
     "jobs/train_hybrid_ranker",
     "jobs/evaluate_model",
     "services/embedder-api",
+    "apps/recommender-api",
 ]

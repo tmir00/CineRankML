@@ -755,6 +755,66 @@ services:
     networks:
       - cinerankml
 
+  recommender-api:
+    build:
+      context: .
+      dockerfile: infra/docker/apps/Dockerfile
+      args:
+        PACKAGE: recommender-api
+    container_name: cinerankml-recommender-api
+    profiles:
+      - api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_INDEX_ALIAS: ${OPENSEARCH_INDEX_ALIAS:-movies}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      RECOMMENDER_HOST: 0.0.0.0
+      RECOMMENDER_PORT: 8090
+      METRICS_PORT: 9111
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-session_id}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-7}
+      CANDIDATE_POOL_SIZE: ${CANDIDATE_POOL_SIZE:-200}
+      DEFAULT_TOP_K: ${DEFAULT_TOP_K:-20}
+      MIN_RATINGS_FOR_RECOMMEND: ${MIN_RATINGS_FOR_RECOMMEND:-5}
+      MODEL_VERSION: ${MODEL_VERSION:-}
+      CF_VERSION: ${CF_VERSION:-}
+    ports:
+      - "8090:8090"
+      - "9111:9111"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    networks:
+      - cinerankml
+
   grafana:
     image: grafana/grafana:11.1.0
     container_name: cinerankml-grafana

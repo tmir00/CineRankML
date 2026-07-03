@@ -7,8 +7,10 @@ from common.db.models.checkpoints import CsvIngestionCheckpoint
 from common.db.models.embeddings import EmbeddingVersion, MovieContentEmbedding
 from common.db.models.catalog import CatalogDirtyMovie, CatalogMovie, MovieTagCount
 from common.db.models.recommendations import RecommendationImpression, RecommendationRating
+from common.db.models.users import AppUser, UserSession
 
 __all__ = [
+    "AppUser",
     "CatalogDirtyMovie",
     "CatalogMovie",
     "CsvIngestionCheckpoint",
@@ -21,4 +23,5 @@ __all__ = [
     "RecommendationImpression",
     "RecommendationRating",
     "TagEvent",
+    "UserSession",
 ]

@@ -442,3 +442,52 @@ def count_dirty_movies(session: Session) -> int:
     # Build the SQLAlchemy select statement to count the number of rows in catalog_dirty_movies.
     result = session.execute(select(func.count()).select_from(CatalogDirtyMovie))
     return int(result.scalar_one())
+
+
+@dataclass(frozen=True)
+class CatalogMovieRow:
+    """Catalog metadata needed for hybrid ranker candidate features."""
+
+    movie_id: int
+    title: str
+    year: int | None
+    runtime: int | None
+    tmdb_popularity: float | None
+    tmdb_vote_average: float | None
+    tmdb_vote_count: int | None
+
+
+def get_catalog_movies_by_ids(session: Session, movie_ids: list[int]) -> dict[int, CatalogMovieRow]:
+    """
+    Load catalog metadata for a batch of movie ids.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    movie_ids: Movies to look up in catalog_movies.
+
+    ============================ Returns ============================
+    Mapping of movie_id to catalog metadata rows.
+    """
+    if not movie_ids:
+        return {}
+
+    stmt = select(CatalogMovie).where(CatalogMovie.movie_id.in_(movie_ids))
+    rows = session.scalars(stmt).all()
+    return {
+        row.movie_id: CatalogMovieRow(
+            movie_id=row.movie_id,
+            title=row.title,
+            year=row.year,
+            runtime=row.runtime,
+            tmdb_popularity=row.tmdb_popularity,
+            tmdb_vote_average=row.tmdb_vote_average,
+            tmdb_vote_count=row.tmdb_vote_count,
+        )
+        for row in rows
+    }
+
+
+def catalog_movie_exists(session: Session, movie_id: int) -> bool:
+    """Return True when one movie_id exists in catalog_movies."""
+    stmt = select(CatalogMovie.movie_id).where(CatalogMovie.movie_id == movie_id)
+    return session.execute(stmt).scalar_one_or_none() is not None
