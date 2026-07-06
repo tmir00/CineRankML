@@ -48,6 +48,7 @@ def create_movies_router(runtime: InferenceRuntime) -> APIRouter:
                 title=hit.title,
                 year=hit.year,
                 genres=hit.genres,
+                poster_path=hit.poster_path or None,
             )
             for hit in hits
         ]

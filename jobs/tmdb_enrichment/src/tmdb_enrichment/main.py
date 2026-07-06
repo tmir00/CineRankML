@@ -82,6 +82,7 @@ def main() -> None:
                 client,
                 enrichment_settings,
                 stats,
+                enrich_all=enrichment_settings.enrich_all,
             )
         except KeyboardInterrupt:
             session.rollback()

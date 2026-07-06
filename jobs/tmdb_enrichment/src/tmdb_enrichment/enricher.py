@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from common.config.settings import EnrichmentSettings
 from common.db.repositories.catalog import (
     apply_enrichment,
-    count_pending_enrichment,
-    fetch_pending_enrichment,
+    count_enrichable_movies,
+    fetch_enrichment_batch,
     mark_catalog_movie_dirty,
     mark_movies_without_tmdb_skipped,
 )
@@ -33,13 +33,15 @@ def run_enrichment_loop(
     client: TmdbClient,
     settings: EnrichmentSettings,
     stats: EnrichmentStats,
+    *,
+    enrich_all: bool = False,
 ) -> None:
     """
-    Enrich pending catalog movies with TMDB metadata in batches.
+    Enrich catalog movies with TMDB metadata in batches.
 
     Do this by:
     1. Marking movies without a tmdb_id as skipped.
-    2. Fetching pending rows in batches until none remain or the limit is reached.
+    2. Fetching rows in batches until none remain or the limit is reached.
     3. Calling TMDB for each movie, updating catalog_movies, and marking dirty on success.
     4. Persisting enrichment_last_error on catalog_movies when TMDB enrichment fails.
 
@@ -48,15 +50,14 @@ def run_enrichment_loop(
     client: TMDB HTTP client with rate limiting.
     settings: Batch size, optional limit, and log frequency.
     stats: Mutable counters updated as movies are enriched or fail.
+    enrich_all: When True, re-fetch TMDB metadata for all movies with a tmdb_id.
 
     ============================ Returns ============================
     None. Progress counts are stored on stats.processed and stats.failed.
     """
-    # Mark movies without a tmdb_id as skipped.
     skipped_no_tmdb = mark_movies_without_tmdb_skipped(session)
     session.commit()
 
-    # If any movies were marked as skipped, log the count and record the metric.
     if skipped_no_tmdb:
         logger.info(
             "Marked movies without tmdb_id as skipped",
@@ -64,35 +65,40 @@ def run_enrichment_loop(
         )
 
     remaining_limit = settings.enrichment_limit
+    after_movie_id = 0
 
-    # Loop until no more pending movies or the limit is reached.
     while True:
-        batch = fetch_pending_enrichment(
+        batch = fetch_enrichment_batch(
             session,
             batch_size=settings.enrichment_batch_size,
             remaining_limit=remaining_limit,
+            enrich_all=enrich_all,
+            after_movie_id=after_movie_id,
         )
-        # If there are no more pending movies, break the loop.
         if not batch:
             break
 
-        # Iterate over the batch of pending movies.
         for movie in batch:
-            # If the movie has no tmdb_id, skip it.
             if movie.tmdb_id is None:
                 continue
 
             details, error_type = client.fetch_movie(movie.tmdb_id)
 
-            # If the fetched movie details are not None, update the movie and mark it as dirty.
             if details is not None:
-                # Apply the enrichment to the movie and clear any prior failure reason.
                 apply_enrichment(session, movie.movie_id, details, "enriched", last_error=None)
-                # Mark the movie as dirty.
                 mark_catalog_movie_dirty(session, movie.movie_id)
                 stats.processed += 1
+                logger.info(
+                    "Enriched %s (poster_path=%s)",
+                    movie.title,
+                    details.poster_path,
+                    extra={
+                        "movie_id": movie.movie_id,
+                        "title": movie.title,
+                        "poster_path": details.poster_path,
+                    },
+                )
             else:
-                # Set the enrichment status to failed and persist the TMDB error reason.
                 apply_enrichment(
                     session,
                     movie.movie_id,
@@ -102,29 +108,27 @@ def run_enrichment_loop(
                 )
                 stats.failed += 1
 
-            # If there is a remaining limit, decrement it and check if it has reached 0.
             if remaining_limit is not None:
                 remaining_limit -= 1
-                # If the remaining limit has reached 0, break the loop.
                 if remaining_limit <= 0:
                     break
 
-            # Calculate the total number of processed and failed movies.
             total = stats.processed + stats.failed
-            # If the total number of processed and failed movies is a multiple of the log frequency, log the progress.
             if total % settings.enrichment_log_every_n == 0:
                 logger.info(
                     "Enrichment progress",
                     extra={
                         "processed": stats.processed,
                         "failed": stats.failed,
-                        "pending": count_pending_enrichment(session),
+                        "enrich_all": enrich_all,
+                        "remaining": count_enrichable_movies(session, enrich_all=enrich_all),
                     },
                 )
 
-        # Commit the session.
+        if enrich_all and batch:
+            after_movie_id = batch[-1].movie_id
+
         session.commit()
 
-        # If there is a remaining limit and it has reached 0, break the loop.
         if remaining_limit is not None and remaining_limit <= 0:
             break

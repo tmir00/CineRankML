@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import logging
-import sys
 import time
 
 from common.config.settings import (
@@ -18,21 +17,13 @@ from common.kafka.csv_checkpoint import read_csv_checkpoint, save_csv_checkpoint
 from common.kafka.producer import KafkaEventProducer
 from common.metrics.worker import WorkerMetrics
 from common.schemas.events import RatingCreatedEvent, rating_row_to_event
+from common.logging_config import configure_worker_logging
 
 logger = logging.getLogger(__name__)
 
 
-def configure_logging() -> None:
-    """Set up basic structured logging for the producer process."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout,
-    )
-
-
 def stream_ratings_csv(producer: KafkaEventProducer, topic: str, csv_path: str, source_file: str, start_row: int, \
-                        row_delay_seconds: float, row_limit: int | None, checkpoint_every_n: int, metrics: WorkerMetrics, shutdown: GracefulShutdown) -> None:
+                        row_delay_seconds: float, row_limit: int | None, checkpoint_every_n: int, progress_log_every_n: int, metrics: WorkerMetrics, shutdown: GracefulShutdown) -> None:
     """
     Read ratings.csv and publish rating_created events to Kafka.
 
@@ -51,6 +42,7 @@ def stream_ratings_csv(producer: KafkaEventProducer, topic: str, csv_path: str, 
     row_delay_seconds: Seconds to sleep after each published row.
     row_limit: Optional cap on rows for smoke tests.
     checkpoint_every_n: How often to persist progress to Postgres.
+    progress_log_every_n: How often to log CSV row progress at INFO.
     metrics: Prometheus metrics helper.
     shutdown: Graceful shutdown tracker.
     """
@@ -115,6 +107,20 @@ def stream_ratings_csv(producer: KafkaEventProducer, topic: str, csv_path: str, 
                     save_csv_checkpoint(source_file, row_index, last_event_id)
                     last_saved_row = row_index
 
+                if progress_log_every_n > 0 and published % progress_log_every_n == 0:
+                    logger.info(
+                        "CSV stream progress at row %s (%s rows published this run)",
+                        row_index,
+                        published,
+                        extra={
+                            "source_file": source_file,
+                            "row_index": row_index,
+                            "published_this_run": published,
+                            "resume_row": resume_row,
+                            "event_id": last_event_id,
+                        },
+                    )
+
                 time.sleep(row_delay_seconds)
     finally:
         # Flush any remaining progress when we stop early or finish the final partial batch.
@@ -137,14 +143,11 @@ def main() -> None:
     2. Creating the Kafka producer.
     3. Streaming ratings.csv until row_limit or shutdown.
     """
-    configure_logging()
-
-    # Get the Kafka settings.
-    kafka_settings = get_kafka_settings()
-    # Get the producer settings.
-    producer_settings = get_producer_settings()
-    # Get the metrics settings.
     metrics_settings = get_worker_metrics_settings()
+    configure_worker_logging(metrics_settings.log_level)
+
+    kafka_settings = get_kafka_settings()
+    producer_settings = get_producer_settings()
 
     # Create the WorkerMetrics instance.
     metrics = WorkerMetrics(metrics_settings.worker_name)
@@ -170,6 +173,7 @@ def main() -> None:
             row_delay_seconds=producer_row_delay_seconds(producer_settings),
             row_limit=producer_settings.row_limit,
             checkpoint_every_n=producer_settings.checkpoint_every_n,
+            progress_log_every_n=producer_settings.progress_log_every_n,
             metrics=metrics,
             shutdown=shutdown,
         )

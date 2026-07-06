@@ -17,7 +17,8 @@ class RatingsEvent(Base):
     event_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, nullable=False)
     movie_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    rating: Mapped[float] = mapped_column(Float, nullable=False)
+    event_type: Mapped[str] = mapped_column(Text, nullable=False, server_default="rating_created")
+    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
     rating_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     stream_pipeline_version: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

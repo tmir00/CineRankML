@@ -21,6 +21,7 @@ class ImpressionRow:
     experiment_id: str
     predicted_score: float
     shown_at: datetime
+    retrieval_source: str
 
 
 def insert_impressions(session: Session, rows: list[ImpressionRow]) -> int:
@@ -49,6 +50,7 @@ def insert_impressions(session: Session, rows: list[ImpressionRow]) -> int:
                 experiment_id=row.experiment_id,
                 predicted_score=row.predicted_score,
                 shown_at=row.shown_at,
+                retrieval_source=row.retrieval_source,
             )
         )
     session.flush()

@@ -19,3 +19,12 @@ packages = ["src/tmdb_enrichment"]
 
 [tool.uv.sources]
 common = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

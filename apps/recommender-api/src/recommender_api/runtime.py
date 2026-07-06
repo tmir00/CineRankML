@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from common.kafka.producer import KafkaEventProducer
 from train_hybrid_ranker.model import HybridRankerMLP
 from common.metrics.recommender import RecommenderMetrics
+from common.opensearch.retrieval import RetrievalSettings
 from common.storage.cf_embedding_cache import CfEmbeddingCache
 from common.schemas.hybrid_ranker_artifact_manifest import HybridModelConfig
 
@@ -27,7 +28,7 @@ class InferenceRuntime:
     kafka_producer: KafkaEventProducer
     metrics: RecommenderMetrics
     opensearch_index_alias: str
-    candidate_pool_size: int
+    retrieval: RetrievalSettings
     min_ratings_for_recommend: int
     default_top_k: int
     device: torch.device

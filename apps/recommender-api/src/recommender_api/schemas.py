@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -58,6 +60,7 @@ class RecommendationItem(BaseModel):
     title: str
     year: int | None
     genres: list[str]
+    poster_path: str | None = None
     predicted_score: float
     rank_position: int
 
@@ -86,6 +89,30 @@ class SubmitRatingResponse(BaseModel):
     status: str = "queued"
 
 
+class DeleteRatingResponse(BaseModel):
+    """Response body after publishing one rating_deleted event."""
+
+    status: str = "queued"
+
+
+class UserRatingItem(BaseModel):
+    """One active user rating returned to the frontend."""
+
+    movie_id: int
+    title: str
+    year: int | None
+    genres: list[str]
+    poster_path: str | None = None
+    rating: float
+    rated_at: datetime
+
+
+class UserRatingsResponse(BaseModel):
+    """Response body for GET /v1/ratings."""
+
+    ratings: list[UserRatingItem]
+
+
 class MovieSearchItem(BaseModel):
     """One movie returned from title search."""
 
@@ -93,6 +120,7 @@ class MovieSearchItem(BaseModel):
     title: str
     year: int | None
     genres: list[str]
+    poster_path: str | None = None
 
 
 class MovieSearchResponse(BaseModel):

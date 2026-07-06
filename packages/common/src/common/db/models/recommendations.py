@@ -26,6 +26,7 @@ class RecommendationImpression(Base):
     experiment_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     predicted_score: Mapped[float] = mapped_column(Float, nullable=False)
     shown_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    retrieval_source: Mapped[str] = mapped_column(Text, nullable=False, server_default="unknown")
 
 
 class RecommendationRating(Base):

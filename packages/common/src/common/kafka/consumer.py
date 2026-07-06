@@ -18,7 +18,8 @@ from confluent_kafka import Consumer, KafkaError, KafkaException, Message
 logger = logging.getLogger(__name__)
 
 TEvent = TypeVar("TEvent", bound=BaseModel)
-ProcessEventFn = Callable[[TEvent], str]
+ProcessEventFn = Callable[[BaseModel], str]
+ParseEventFn = Callable[[dict], BaseModel]
 SaveDeadLetterFn = Callable[..., None]
 
 
@@ -196,9 +197,89 @@ def _raw_payload_text(msg: Message) -> str:
     return str(value)
 
 
-def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str, event_model: type[TEvent], \
-                        save_dead_letter: SaveDeadLetterFn, metrics: WorkerMetrics, process_event: ProcessEventFn[TEvent], 
-                        shutdown: GracefulShutdown | None = None, lag_poll_interval_seconds: float = 15.0) -> None:
+def _log_received_message(msg: Message) -> None:
+    """Emit a DEBUG line when a Kafka message is polled for processing."""
+    logger.debug(
+        "received message topic=%s partition=%s offset=%s",
+        msg.topic(),
+        msg.partition(),
+        msg.offset(),
+    )
+
+
+def _log_db_write_finished(msg: Message, db_ms: float, *, status: str) -> None:
+    """Emit a DEBUG line after a Postgres or DLQ write completes."""
+    logger.debug(
+        "db write finished partition=%s offset=%s db_ms=%.2f status=%s",
+        msg.partition(),
+        msg.offset(),
+        db_ms,
+        status,
+    )
+
+
+def _commit_with_logging(consumer: KafkaEventConsumer, msg: Message) -> None:
+    """Commit one Kafka offset and emit a DEBUG line with commit latency."""
+    commit_start = time.perf_counter()
+    try:
+        consumer.commit(msg)
+    except KafkaException:
+        logger.exception(
+            "commit failed partition=%s offset=%s",
+            msg.partition(),
+            msg.offset(),
+        )
+        raise
+
+    commit_ms = (time.perf_counter() - commit_start) * 1000
+    logger.debug(
+        "committed partition=%s offset=%s commit_ms=%.2f",
+        msg.partition(),
+        msg.offset(),
+        commit_ms,
+    )
+
+
+def _log_consumer_progress_if_due(
+    *,
+    handled_count: int,
+    progress_log_every_n: int,
+    topic: str,
+    worker_name: str,
+    lag_resolver: Callable[[], int],
+    ctx: dict[str, object],
+    status: str | None = None,
+) -> None:
+    """Emit a periodic INFO progress line after every N handled Kafka messages."""
+    if progress_log_every_n <= 0 or handled_count % progress_log_every_n != 0:
+        return
+
+    lag = lag_resolver()
+
+    extra: dict[str, object] = {
+        "topic": topic,
+        "worker_name": worker_name,
+        "handled_count": handled_count,
+        "consumer_lag": lag,
+        **ctx,
+    }
+    if status is not None:
+        extra["status"] = status
+
+    logger.info(
+        "Consumer progress: handled %s messages (lag=%s, partition=%s, offset=%s)",
+        handled_count,
+        lag,
+        ctx.get("partition"),
+        ctx.get("offset"),
+        extra=extra,
+    )
+
+
+def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str, save_dead_letter: SaveDeadLetterFn, \
+                        metrics: WorkerMetrics, process_event: ProcessEventFn, event_model: type[TEvent] | None = None, \
+                        parse_event: ParseEventFn | None = None, shutdown: GracefulShutdown | None = None, \
+                        lag_poll_interval_seconds: float = 15.0, progress_log_every_n: int = 10000) -> None:
     """
     Poll Kafka, validate events, write to Postgres, and commit offsets.
 
@@ -213,15 +294,20 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
     consumer: The subscribed KafkaEventConsumer instance.
     topic: Primary topic name (used in logs and metrics).
     worker_name: Worker name stored on dead_letter_events rows.
-    event_model: Pydantic model class for this topic's events.
     save_dead_letter: Callable that persists one row to dead_letter_events.
     metrics: Prometheus metrics helper for this worker.
     process_event: Callable that writes one validated event to Postgres.
+    event_model: Pydantic model class used when parse_event is not provided.
+    parse_event: Optional callable that validates one raw dict into a typed event.
     shutdown: Optional GracefulShutdown tracker; created when omitted.
     lag_poll_interval_seconds: How often to refresh consumer_lag gauge.
+    progress_log_every_n: How often to log handled-message progress at INFO.
     """
+    if event_model is None and parse_event is None:
+        raise ValueError("run_consumer_loop requires event_model or parse_event")
     # Create a GracefulShutdown tracker if not provided.
     shutdown = shutdown or GracefulShutdown()
+    handled_count = 0
     # Log the consumer started with topic/group_id.
     logger.info(
         "Consumer started with topic/group_id",
@@ -239,8 +325,6 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
         if now - last_lag_update >= lag_poll_interval_seconds:
             metrics.set_consumer_lag(topic, consumer.estimate_lag())
             last_lag_update = now
-            # Log the consumer lag.
-            logger.debug("Consumer lag updated", extra={"topic": topic, "lag": metrics.consumer_lag})
 
         # Poll for the next message from the consumer.
         try:
@@ -256,7 +340,7 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
             continue
 
         ctx = _message_context(msg)
-        logger.debug("Event consumed from Kafka", extra=ctx)
+        _log_received_message(msg)
 
         # Get the raw payload text from the message.
         raw_text = _raw_payload_text(msg)
@@ -279,6 +363,7 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
             )
             
             # Save the bad event to the dead-letter table.
+            db_start = time.perf_counter()
             save_dead_letter(
                 worker_name=worker_name,
                 source_topic=msg.topic() or topic,
@@ -289,26 +374,41 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
                 raw_payload=raw_text,
                 event_id=None,
             )
+            _log_db_write_finished(msg, (time.perf_counter() - db_start) * 1000, status="validation_error")
             # Record the consumed event.
             metrics.record_consumed(topic, "validation_error")
             # Record the dead-letter event.
             metrics.record_dlq(error_type)
             logger.warning("Bad event saved to dead-letter table", extra=ctx)
-            
-            # Commit the offset for the message.
+
             try:
-                consumer.commit(msg)
-                # Log the offset committed.
-                logger.debug("Offset committed", extra=ctx)
-            # If there is a Kafka exception, log the error.
-            except KafkaException as commit_exc:
-                logger.error("Offset commit failed", extra={**ctx, "error": str(commit_exc)})
+                _commit_with_logging(consumer, msg)
+            except KafkaException:
+                pass
             
+            handled_count += 1
+            _log_consumer_progress_if_due(
+                handled_count=handled_count,
+                progress_log_every_n=progress_log_every_n,
+                topic=topic,
+                worker_name=worker_name,
+                lag_resolver=consumer.estimate_lag,
+                ctx=ctx,
+                status="validation_error",
+            )
             # Continue to the next message.
             continue
 
         # Validate the payload against the expected Pydantic model.
-        event, validation_error = try_validate_event(raw_dict, event_model)
+        if parse_event is not None:
+            try:
+                event = parse_event(raw_dict)
+                validation_error = None
+            except Exception as exc:
+                event = None
+                validation_error = str(exc)
+        else:
+            event, validation_error = try_validate_event(raw_dict, event_model)  # type: ignore[arg-type]
 
         # If there is a validation error or the event is None, log the error.
         if validation_error is not None or event is None:
@@ -319,6 +419,7 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
             )
 
             # Save the bad event to the dead-letter table.
+            db_start = time.perf_counter()
             save_dead_letter(
                 worker_name=worker_name,
                 source_topic=msg.topic() or topic,
@@ -329,21 +430,28 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
                 raw_payload=raw_text,
                 event_id=str(raw_dict.get("event_id")) if raw_dict.get("event_id") else None,
             )
+            _log_db_write_finished(msg, (time.perf_counter() - db_start) * 1000, status="validation_error")
             # Record the consumed event.
             metrics.record_consumed(topic, "validation_error")
             # Record the dead-letter event.
             metrics.record_dlq("validation_error")
             logger.warning("Bad event saved to dead-letter table", extra=ctx)
-            
-            # Commit the offset for the message.
+
             try:
-                consumer.commit(msg)
-                # Log the offset committed.
-                logger.debug("Offset committed", extra=ctx)
-            
-            # If there is a Kafka exception, log the error.
-            except KafkaException as commit_exc:
-                logger.error("Offset commit failed", extra={**ctx, "error": str(commit_exc)})
+                _commit_with_logging(consumer, msg)
+            except KafkaException:
+                pass
+
+            handled_count += 1
+            _log_consumer_progress_if_due(
+                handled_count=handled_count,
+                progress_log_every_n=progress_log_every_n,
+                topic=topic,
+                worker_name=worker_name,
+                lag_resolver=consumer.estimate_lag,
+                ctx=ctx,
+                status="validation_error",
+            )
             continue
 
         # Get the event id string.
@@ -353,21 +461,23 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
 
         # Run the worker-specific Postgres handler.
         try:
+            db_start = time.perf_counter()
             with metrics.time_db_write():
-                # Run the worker-specific Postgres handler.
                 status = process_event(event)
-        
+            _log_db_write_finished(msg, (time.perf_counter() - db_start) * 1000, status=status)
+
         # If there is an exception, log the error.
         except Exception as exc:
-            # Log the error.
-            logger.error(
-                "Insert failed / rollback",
-                extra={**ctx_with_event, "error": str(exc)},
+            logger.exception(
+                "failed processing partition=%s offset=%s",
+                msg.partition(),
+                msg.offset(),
             )
             # Record the database failure.
             metrics.record_db_failure("db_write_error")
-            
+
             # Save the bad event to the dead-letter table.
+            db_start = time.perf_counter()
             save_dead_letter(
                 worker_name=worker_name,
                 source_topic=msg.topic() or topic,
@@ -378,43 +488,52 @@ def run_consumer_loop(consumer: KafkaEventConsumer, topic: str, worker_name: str
                 raw_payload=raw_text,
                 event_id=event_id_str,
             )
+            _log_db_write_finished(msg, (time.perf_counter() - db_start) * 1000, status="dlq")
             # Record the consumed event.
             metrics.record_consumed(topic, "db_error")
             # Record the dead-letter event.
             metrics.record_dlq("db_write_error")
             # Log the bad event saved to the dead-letter table.
             logger.warning("Bad event saved to dead-letter table", extra=ctx_with_event)
-            
-            # Commit the offset for the message.
+
             try:
-                consumer.commit(msg)
-                # Log the offset committed.
-                logger.debug("Offset committed", extra=ctx_with_event)
-            # If there is a Kafka exception, log the error.
-            except KafkaException as commit_exc:
-                logger.error(
-                    "Offset commit failed",
-                    extra={**ctx_with_event, "error": str(commit_exc)},
-                )
+                _commit_with_logging(consumer, msg)
+            except KafkaException:
+                pass
+
+            handled_count += 1
+            _log_consumer_progress_if_due(
+                handled_count=handled_count,
+                progress_log_every_n=progress_log_every_n,
+                topic=topic,
+                worker_name=worker_name,
+                lag_resolver=consumer.estimate_lag,
+                ctx=ctx_with_event,
+                status="db_write_error",
+            )
             continue
 
-        # Log the event written to Postgres.
-        logger.debug("Event written to Postgres", extra={**ctx_with_event, "status": status})
         # Record the consumed event.
         metrics.record_consumed(topic, status)
-        # Commit the offset for the message.
 
         try:
-            # Commit the offset for the message.
-            consumer.commit(msg)
-            # Log the offset committed.
-            logger.debug("Offset committed", extra=ctx_with_event)
-        # If there is a Kafka exception, log the error.
-        except KafkaException as commit_exc:
-            logger.error(
-                "Offset commit failed",
-                extra={**ctx_with_event, "error": str(commit_exc)},
-            )
+            _commit_with_logging(consumer, msg)
+        except KafkaException:
+            pass
+
+        handled_count += 1
+        _log_consumer_progress_if_due(
+            handled_count=handled_count,
+            progress_log_every_n=progress_log_every_n,
+            topic=topic,
+            worker_name=worker_name,
+            lag_resolver=consumer.estimate_lag,
+            ctx=ctx_with_event,
+            status=status,
+        )
 
     consumer.close()
-    logger.info("Consumer stopped cleanly", extra={"topic": topic, "worker_name": worker_name})
+    logger.info(
+        "Consumer stopped cleanly",
+        extra={"topic": topic, "worker_name": worker_name, "handled_count": handled_count},
+    )

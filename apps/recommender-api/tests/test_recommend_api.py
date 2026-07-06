@@ -10,6 +10,7 @@ from train_hybrid_ranker.model import HybridRankerMLP
 
 from common.features.schema import INPUT_DIM
 from common.metrics.recommender import RecommenderMetrics
+from common.opensearch.retrieval import RetrievalSettings
 from common.schemas.hybrid_ranker_artifact_manifest import HybridModelConfig
 from common.features.normalization import MetadataNormalizationStats
 from common.storage.cf_embedding_cache import CfEmbeddingCache
@@ -65,7 +66,7 @@ def _build_test_runtime() -> InferenceRuntime:
         kafka_producer=MagicMock(),
         metrics=RecommenderMetrics(),
         opensearch_index_alias="movies",
-        candidate_pool_size=10,
+        retrieval=RetrievalSettings(knn_size=10, max_candidates=20),
         min_ratings_for_recommend=5,
         default_top_k=20,
         device=torch.device("cpu"),

@@ -39,6 +39,21 @@ class RatingCreatedEvent(BaseKafkaEvent):
     experiment_id: str | None = None
 
 
+class RatingDeletedEvent(BaseKafkaEvent):
+    """A user rating removal event published to the ratings topic."""
+
+    event_type: Literal["rating_deleted"]
+    user_id: int
+    movie_id: int
+    rating_timestamp: datetime
+    request_id: str | None = None
+    model_version: str | None = None
+    experiment_id: str | None = None
+
+
+RatingStreamEvent = RatingCreatedEvent | RatingDeletedEvent
+
+
 class TagCreatedEvent(BaseKafkaEvent):
     """A user tag event published to the tags topic."""
 
@@ -131,6 +146,29 @@ def try_validate_event(raw: dict, model: type[TEvent]) -> tuple[TEvent | None, s
 def is_validation_error(exc: BaseException) -> bool:
     """Return True when an exception came from Pydantic validation."""
     return isinstance(exc, ValidationError)
+
+
+def parse_rating_stream_event(raw: dict) -> RatingStreamEvent:
+    """
+    Validate one ratings-topic payload into the correct event model.
+
+    Do this by:
+    1. Reading event_type from the decoded JSON dict.
+    2. Validating with RatingCreatedEvent or RatingDeletedEvent.
+    3. Raising ValidationError when event_type is missing or unknown.
+
+    ============================ Arguments ============================
+    raw: The decoded JSON payload from the ratings Kafka topic.
+
+    ============================ Returns ============================
+    A validated rating_created or rating_deleted event.
+    """
+    event_type = raw.get("event_type")
+    if event_type == "rating_created":
+        return RatingCreatedEvent.model_validate(raw)
+    if event_type == "rating_deleted":
+        return RatingDeletedEvent.model_validate(raw)
+    raise ValueError(f"Unknown ratings event_type: {event_type!r}")
 
 
 def rating_row_to_event(row: dict[str, str], produced_at: datetime | None = None) -> RatingCreatedEvent:

@@ -2,28 +2,19 @@
 
 from __future__ import annotations
 
-import sys
 import logging
 
 from common.metrics.worker import WorkerMetrics
 from common.db.session import get_session_factory
-from common.schemas.events import RatingCreatedEvent
-from ratings_consumer.handler import process_rating_event
+from common.schemas.events import parse_rating_stream_event
+from ratings_consumer.handler import process_rating_stream_event
 from common.db.repositories.dead_letter import insert_dead_letter_event
 from common.config.settings import get_kafka_settings, get_worker_metrics_settings
 from common.kafka.consumer import GracefulShutdown, KafkaEventConsumer, run_consumer_loop
+from common.logging_config import configure_worker_logging
 
 
 logger = logging.getLogger(__name__)
-
-
-def configure_logging() -> None:
-    """Set up basic structured logging for the consumer process."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout,
-    )
 
 
 def save_dead_letter(**kwargs: object) -> None:
@@ -63,12 +54,10 @@ def main() -> None:
     2. Subscribing to the ratings topic.
     3. Running the shared consumer loop with the rating write handler.
     """
-    # Set up basic structured logging for the consumer process.
-    configure_logging()
-
-    # Get the Kafka and metrics settings.
-    kafka_settings = get_kafka_settings()
     metrics_settings = get_worker_metrics_settings()
+    configure_worker_logging(metrics_settings.log_level)
+
+    kafka_settings = get_kafka_settings()
 
     # Create the WorkerMetrics instance.
     metrics = WorkerMetrics(metrics_settings.worker_name)
@@ -89,11 +78,12 @@ def main() -> None:
         consumer=consumer,
         topic=kafka_settings.ratings_topic,
         worker_name=metrics_settings.worker_name,
-        event_model=RatingCreatedEvent,
         save_dead_letter=save_dead_letter,
         metrics=metrics,
-        process_event=process_rating_event,
+        process_event=process_rating_stream_event,
+        parse_event=parse_rating_stream_event,
         shutdown=shutdown,
+        progress_log_every_n=metrics_settings.progress_log_every_n,
     )
 
 

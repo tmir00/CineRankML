@@ -42,8 +42,8 @@ def create_recommend_router(runtime: InferenceRuntime, settings: RecommenderApiS
             # Run the full OpenSearch + hybrid ranker pipeline.
             with runtime.metrics.time_recommend("recommend"):
                 response = run_recommendation(
-                    runtime,
-                    session,
+                    runtime=runtime,
+                    session=session,
                     user_id=user.user_id,
                     new_ratings=request_body.ratings,
                     top_k=top_k,

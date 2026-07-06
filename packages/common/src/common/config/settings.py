@@ -45,6 +45,7 @@ class ProducerSettings(BaseSettings):
     start_row: int = 0
     producer_log_every_n: int = 1000
     checkpoint_every_n: int = 1000
+    progress_log_every_n: int = Field(default=10000, validation_alias="PROGRESS_LOG_EVERY_N")
 
     @model_validator(mode="after")
     def _default_source_file(self) -> Self:
@@ -76,6 +77,8 @@ class WorkerMetricsSettings(BaseSettings):
 
     metrics_port: int = 9100
     worker_name: str = "worker"
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    progress_log_every_n: int = Field(default=10000, validation_alias="PROGRESS_LOG_EVERY_N")
 
 
 class TmdbSettings(BaseSettings):
@@ -108,6 +111,7 @@ class EnrichmentSettings(BaseSettings):
     enrichment_batch_size: int = 50
     enrichment_limit: int | None = None
     enrichment_log_every_n: int = 100
+    enrich_all: bool = Field(default=False, validation_alias="ENRICH_ALL")
 
     @field_validator("enrichment_limit", mode="before")
     @classmethod

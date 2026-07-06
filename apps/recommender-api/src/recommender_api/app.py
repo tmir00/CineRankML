@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from recommender_api.runtime import InferenceRuntime
 from recommender_api.routes.auth import create_auth_router
 from recommender_api.settings import RecommenderApiSettings
@@ -27,6 +28,14 @@ def create_app(runtime: InferenceRuntime, settings: RecommenderApiSettings) -> F
     Configured FastAPI app ready for uvicorn.
     """
     app = FastAPI(title="recommender-api", version="0.1.0")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.get("/health")
     def health() -> dict[str, str | int | bool]:

@@ -23,6 +23,7 @@
       "tmdb_vote_count": { "type": "integer" },
       "tmdb_id": { "type": "integer" },
       "imdb_id": { "type": "keyword" },
+      "poster_path": { "type": "keyword" },
       "embedding_version": { "type": "keyword" },
       "content_embedding": {
         "type": "knn_vector",

@@ -16,6 +16,7 @@ from train_hybrid_ranker.model import HybridRankerMLP
 from common.metrics.recommender import RecommenderMetrics
 from recommender_api.settings import RecommenderApiSettings
 from common.opensearch.client import create_opensearch_client
+from common.opensearch.retrieval import RetrievalSettings
 from common.storage.cf_embedding_cache import CfEmbeddingCache
 from common.features.schema import FEATURE_SCHEMA_VERSION, INPUT_DIM
 from common.config.settings import get_kafka_settings, get_opensearch_settings
@@ -111,6 +112,18 @@ def load_runtime(settings: RecommenderApiSettings) -> InferenceRuntime:
     metrics.start_server(settings.metrics_port)
 
     # Create the inference runtime.
+    retrieval = RetrievalSettings(
+        knn_size=settings.retrieval_knn_size,
+        popular_size=settings.retrieval_popular_size,
+        random_genre_size=settings.retrieval_random_genre_size,
+        random_knn_size=settings.retrieval_random_knn_size,
+        knn_pool_size=settings.retrieval_knn_pool_size,
+        random_knn_skip_top=settings.retrieval_random_knn_skip_top,
+        max_candidates=settings.retrieval_max_candidates,
+        liked_genre_count=settings.retrieval_liked_genre_count,
+        min_vote_count=settings.retrieval_min_vote_count,
+        min_vote_average=settings.retrieval_min_vote_average,
+    )
     runtime = InferenceRuntime(
         model=model,
         model_config=model_config,
@@ -121,7 +134,7 @@ def load_runtime(settings: RecommenderApiSettings) -> InferenceRuntime:
         kafka_producer=KafkaEventProducer(kafka_settings.kafka_bootstrap_servers),
         metrics=metrics,
         opensearch_index_alias=opensearch_settings.opensearch_index_alias,
-        candidate_pool_size=settings.candidate_pool_size,
+        retrieval=retrieval,
         min_ratings_for_recommend=settings.min_ratings_for_recommend,
         default_top_k=settings.default_top_k,
         device=device,

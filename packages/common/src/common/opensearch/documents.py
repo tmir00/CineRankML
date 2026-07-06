@@ -22,6 +22,7 @@ class MovieLike(Protocol):
     tmdb_vote_count: int | None
     tmdb_id: int | None
     imdb_id: str | None
+    poster_path: str | None
 
 
 def build_movie_document(movie: MovieLike, tags: list[str], embedding: list[float], \
@@ -59,6 +60,7 @@ def build_movie_document(movie: MovieLike, tags: list[str], embedding: list[floa
         "tmdb_vote_count": movie.tmdb_vote_count,
         "tmdb_id": movie.tmdb_id,
         "imdb_id": movie.imdb_id,
+        "poster_path": movie.poster_path,
         "embedding_version": embedding_version,
         "content_embedding": embedding,
     }

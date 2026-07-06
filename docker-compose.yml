@@ -2,6 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: cinerankml-postgres
+    shm_size: 2gb
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - maintenance_work_mem=512MB
     env_file:
       - .env
     environment:
@@ -60,6 +69,8 @@ services:
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafkadata:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 10s
@@ -89,6 +100,8 @@ services:
       ROW_LIMIT: ${ROW_LIMIT:-}
       METRICS_PORT: 9101
       WORKER_NAME: ratings-producer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     volumes:
       - ./datasets/ml-25m:/data:ro
     depends_on:
@@ -118,6 +131,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       METRICS_PORT: 9102
       WORKER_NAME: ratings-consumer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     depends_on:
       kafka:
         condition: service_healthy
@@ -148,6 +163,8 @@ services:
       ROW_LIMIT: ${ROW_LIMIT:-}
       METRICS_PORT: 9103
       WORKER_NAME: tags-producer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     volumes:
       - ./datasets/ml-25m:/data:ro
     depends_on:
@@ -177,6 +194,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       METRICS_PORT: 9104
       WORKER_NAME: tags-consumer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     depends_on:
       kafka:
         condition: service_healthy
@@ -232,6 +251,7 @@ services:
       ENRICHMENT_BATCH_SIZE: ${ENRICHMENT_BATCH_SIZE:-50}
       ENRICHMENT_LIMIT: ${ENRICHMENT_LIMIT:-}
       ENRICHMENT_LOG_EVERY_N: ${ENRICHMENT_LOG_EVERY_N:-100}
+      ENRICH_ALL: ${ENRICH_ALL:-false}
     depends_on:
       postgres:
         condition: service_healthy
@@ -786,6 +806,7 @@ services:
       MIN_RATINGS_FOR_RECOMMEND: ${MIN_RATINGS_FOR_RECOMMEND:-5}
       MODEL_VERSION: ${MODEL_VERSION:-}
       CF_VERSION: ${CF_VERSION:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5173}
     ports:
       - "8090:8090"
       - "9111:9111"
@@ -815,6 +836,29 @@ services:
     networks:
       - cinerankml
 
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/docker/frontend/Dockerfile.dev
+    container_name: cinerankml-frontend
+    profiles:
+      - api
+    environment:
+      VITE_RECOMMENDER_API_URL: ${VITE_RECOMMENDER_API_URL:-http://localhost:8090}
+      FRONTEND_PORT: ${FRONTEND_PORT:-5173}
+    volumes:
+      - ./apps/frontend/src:/app/src
+      - ./apps/frontend/index.html:/app/index.html
+      - ./apps/frontend/public:/app/public
+      - ./apps/frontend/vite.config.ts:/app/vite.config.ts
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      recommender-api:
+        condition: service_healthy
+    networks:
+      - cinerankml
+
   grafana:
     image: grafana/grafana:11.1.0
     container_name: cinerankml-grafana
@@ -837,6 +881,7 @@ services:
 
 volumes:
   pgdata:
+  kafkadata:
   osdata:
   miniodata:
   mlflowdata:

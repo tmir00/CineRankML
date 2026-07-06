@@ -87,6 +87,28 @@ def bulk_upsert_catalog_movies(session: Session, rows: list[CatalogSeedRow]) -> 
     return len(rows)
 
 
+def count_enrichable_movies(session: Session, *, enrich_all: bool) -> int:
+    """
+    Count movies eligible for TMDB enrichment in the current mode.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    enrich_all: When True, count all movies with a tmdb_id. When False,
+        count only never-attempted rows (enrichment_status IS NULL).
+
+    ============================ Returns ============================
+    Number of enrichable catalog movies.
+    """
+    filters = [CatalogMovie.tmdb_id.is_not(None)]
+    if not enrich_all:
+        filters.append(CatalogMovie.enrichment_status.is_(None))
+
+    result = session.execute(
+        select(func.count()).select_from(CatalogMovie).where(*filters)
+    )
+    return int(result.scalar_one())
+
+
 def count_pending_enrichment(session: Session) -> int:
     """
     Count movies that still need TMDB enrichment.
@@ -98,26 +120,61 @@ def count_pending_enrichment(session: Session) -> int:
     The number of movies with a tmdb_id that have never been attempted
     (enrichment_status IS NULL).
     """
-    # Build the SQLAlchemy select statement.
-    result = session.execute(
-        select(func.count())
-        .select_from(CatalogMovie)
-        .where(
-            CatalogMovie.tmdb_id.is_not(None),
-            CatalogMovie.enrichment_status.is_(None),
-        )
+    return count_enrichable_movies(session, enrich_all=False)
+
+
+def fetch_enrichment_batch(
+    session: Session,
+    batch_size: int,
+    remaining_limit: int | None,
+    *,
+    enrich_all: bool = False,
+    after_movie_id: int = 0,
+) -> list[CatalogMovie]:
+    """
+    Fetch the next batch of movies for TMDB enrichment.
+
+    Do this by:
+    1. Selecting rows with a tmdb_id.
+    2. In default mode, limiting to never-attempted enrichment_status (NULL).
+    3. In enrich_all mode, paging forward with movie_id cursor.
+    4. Applying the smaller of batch_size and remaining_limit when a cap is set.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    batch_size: Maximum rows to fetch in one batch.
+    remaining_limit: Optional cap on how many movies this job run may still process.
+    enrich_all: When True, include all enrichment statuses and use after_movie_id.
+    after_movie_id: Cursor for enrich_all mode; returns rows with movie_id greater than this.
+
+    ============================ Returns ============================
+    A list of CatalogMovie ORM rows to enrich.
+    """
+    limit = batch_size
+    if remaining_limit is not None:
+        limit = min(batch_size, max(0, remaining_limit))
+
+    if limit <= 0:
+        return []
+
+    filters = [CatalogMovie.tmdb_id.is_not(None)]
+    if enrich_all:
+        filters.append(CatalogMovie.movie_id > after_movie_id)
+    else:
+        filters.append(CatalogMovie.enrichment_status.is_(None))
+
+    stmt = (
+        select(CatalogMovie)
+        .where(*filters)
+        .order_by(CatalogMovie.movie_id)
+        .limit(limit)
     )
-    return int(result.scalar_one())
+    return list(session.scalars(stmt).all())
 
 
 def fetch_pending_enrichment(session: Session, batch_size: int, remaining_limit: int | None) -> list[CatalogMovie]:
     """
     Fetch the next batch of movies waiting for TMDB enrichment.
-
-    Do this by:
-    1. Selecting rows with a tmdb_id and never-attempted enrichment_status (NULL).
-    2. Ordering by movie_id for stable batching.
-    3. Applying the smaller of batch_size and remaining_limit when a cap is set.
 
     ============================ Arguments ============================
     session: An open SQLAlchemy session.
@@ -127,27 +184,12 @@ def fetch_pending_enrichment(session: Session, batch_size: int, remaining_limit:
     ============================ Returns ============================
     A list of CatalogMovie ORM rows to enrich.
     """
-    # Calculate the limit based on the batch size and remaining limit.
-    limit = batch_size
-    if remaining_limit is not None:
-        limit = min(batch_size, max(0, remaining_limit))
-
-    # If the limit is less than or equal to 0, return an empty list.
-    if limit <= 0:
-        return []
-
-    # Build the select statem,ent to fetch the next batch of movies to enrich.
-    stmt = (
-        select(CatalogMovie)
-        .where(
-            CatalogMovie.tmdb_id.is_not(None),
-            CatalogMovie.enrichment_status.is_(None),
-        )
-        .order_by(CatalogMovie.movie_id)
-        .limit(limit)
+    return fetch_enrichment_batch(
+        session,
+        batch_size,
+        remaining_limit,
+        enrich_all=False,
     )
-    # Return the list of CatalogMovie ORM rows to enrich.
-    return list(session.scalars(stmt).all())
 
 
 def apply_enrichment(session: Session, movie_id: int, details: TmdbMovieDetails | None, \
@@ -198,6 +240,7 @@ def apply_enrichment(session: Session, movie_id: int, details: TmdbMovieDetails 
                 "tmdb_vote_average": details.tmdb_vote_average,
                 "tmdb_vote_count": details.tmdb_vote_count,
                 "tmdb_keywords": details.tmdb_keywords or None,
+                "poster_path": details.poster_path,
                 "enriched_at": now,
                 "enrichment_last_error": None,
             }
@@ -291,6 +334,7 @@ class DirtyMovieRow:
     tmdb_vote_count: int | None
     tmdb_id: int | None
     imdb_id: str | None
+    poster_path: str | None
     attempt_count: int
 
 
@@ -339,6 +383,7 @@ def fetch_dirty_movie_batch(session: Session, limit: int) -> list[DirtyMovieRow]
             tmdb_vote_count=movie.tmdb_vote_count,
             tmdb_id=movie.tmdb_id,
             imdb_id=movie.imdb_id,
+            poster_path=movie.poster_path,
             attempt_count=int(attempt_count),
         )
         for movie, attempt_count in rows
@@ -485,6 +530,75 @@ def get_catalog_movies_by_ids(session: Session, movie_ids: list[int]) -> dict[in
         )
         for row in rows
     }
+
+
+@dataclass(frozen=True)
+class CatalogDisplayRow:
+    """Catalog metadata needed to render a movie card in the UI."""
+
+    movie_id: int
+    title: str
+    year: int | None
+    genres: list[str]
+    poster_path: str | None
+
+
+def get_catalog_display_by_ids(session: Session, movie_ids: list[int]) -> dict[int, CatalogDisplayRow]:
+    """
+    Load title, year, genres, and poster_path for a batch of catalog movies.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    movie_ids: Movies to look up in catalog_movies.
+
+    ============================ Returns ============================
+    Mapping of movie_id to display metadata rows.
+    """
+    if not movie_ids:
+        return {}
+
+    stmt = select(CatalogMovie).where(CatalogMovie.movie_id.in_(movie_ids))
+    rows = session.scalars(stmt).all()
+    return {
+        row.movie_id: CatalogDisplayRow(
+            movie_id=row.movie_id,
+            title=row.title,
+            year=row.year,
+            genres=list(row.genres or []),
+            poster_path=row.poster_path,
+        )
+        for row in rows
+    }
+
+
+def get_movie_genres_by_ids(session: Session, movie_ids: list[int]) -> dict[int, list[str]]:
+    """
+    Load genre lists for a batch of catalog movies.
+
+    Do this by:
+    1. Selecting movie_id and genres from catalog_movies for the given ids.
+    2. Returning only rows that have at least one genre string.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    movie_ids: Movies to look up in catalog_movies.
+
+    ============================ Returns ============================
+    Mapping of movie_id to a non-empty genre list.
+    """
+    if not movie_ids:
+        return {}
+
+    stmt = select(CatalogMovie.movie_id, CatalogMovie.genres).where(
+        CatalogMovie.movie_id.in_(movie_ids)
+    )
+    rows = session.execute(stmt).all()
+
+    result: dict[int, list[str]] = {}
+    for movie_id, genres in rows:
+        if genres:
+            result[int(movie_id)] = list(genres)
+    return result
 
 
 def catalog_movie_exists(session: Session, movie_id: int) -> bool:

@@ -25,6 +25,7 @@ class TmdbMovieDetails:
     tmdb_vote_average: float | None
     tmdb_vote_count: int | None
     tmdb_keywords: list[str]
+    poster_path: str | None
 
 
 class TmdbClient:
@@ -188,4 +189,5 @@ class TmdbClient:
             tmdb_vote_average=float(payload["vote_average"]) if payload.get("vote_average") is not None else None,
             tmdb_vote_count=int(vote_count) if vote_count is not None else None,
             tmdb_keywords=keywords,
+            poster_path=payload.get("poster_path") or None,
         )

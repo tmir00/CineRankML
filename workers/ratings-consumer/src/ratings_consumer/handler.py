@@ -1,46 +1,46 @@
-"""Postgres write handler for rating_created events."""
+"""Postgres write handler for ratings-topic events."""
 
 from __future__ import annotations
 
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from common.db.session import get_session_factory
-from common.schemas.events import RatingCreatedEvent
-from common.db.repositories.events import insert_rating_event
+from common.schemas.events import RatingCreatedEvent, RatingDeletedEvent
+from common.db.repositories.events import insert_rating_deleted_event, insert_rating_event
 
 
-def process_rating_event(event: RatingCreatedEvent) -> str:
+def process_rating_stream_event(event: BaseModel) -> str:
     """
-    Insert one validated rating event into ratings_events.
+    Insert one validated ratings-topic event into ratings_events.
 
     Do this by:
     1. Opening a database session and starting a transaction.
-    2. Inserting the row with idempotent event_id handling.
+    2. Routing rating_created and rating_deleted events to the matching insert helper.
     3. Committing on success or rolling back on failure.
 
     ============================ Arguments ============================
-    event: A validated rating_created Kafka event.
+    event: A validated rating_created or rating_deleted Kafka event.
 
     ============================ Returns ============================
     "success" when a new row was inserted, "duplicate" when event_id already existed.
     """
-    # Get the session factory.
     session_factory = get_session_factory()
-    # Create a new session.
     session: Session = session_factory()
 
-    # Try to insert the event.
     try:
-        # Insert the event.
-        inserted = insert_rating_event(session, event)
-        # Commit the session.
+        if isinstance(event, RatingCreatedEvent):
+            inserted = insert_rating_event(session, event)
+        elif isinstance(event, RatingDeletedEvent):
+            inserted = insert_rating_deleted_event(session, event)
+        else:
+            raise TypeError(f"Unsupported ratings event type: {type(event)!r}")
+
         session.commit()
         return "success" if inserted else "duplicate"
-    
+
     except Exception:
-        # In the case of an error, rollback the session.
         session.rollback()
-        # Raise the exception.
         raise
-    
+
     finally:
         session.close()

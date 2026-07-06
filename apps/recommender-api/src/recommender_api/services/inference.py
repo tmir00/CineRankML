@@ -9,10 +9,11 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 from common.features.schema import INPUT_DIM
 from recommender_api.runtime import InferenceRuntime
-from common.opensearch.search import search_similar_movies
+from common.opensearch.retrieval import retrieve_candidate_pool
 from common.db.repositories.ratings import fetch_user_ratings
-from common.db.repositories.catalog import catalog_movie_exists
+from common.db.repositories.catalog import catalog_movie_exists, get_movie_genres_by_ids
 from common.db.repositories.recommendations import ImpressionRow, insert_impressions
+from common.recommendation.liked_genres import derive_liked_genres
 from recommender_api.schemas import RatingInput, RecommendationItem, RecommendResponse
 from recommender_api.services.rating_publisher import build_api_rating_event, publish_rating_event
 
@@ -90,15 +91,24 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
             metrics=runtime.metrics,
         )
 
-        # Retrieve candidate movies from OpenSearch.
+        # Retrieve candidate movies from OpenSearch using multi-bucket retrieval.
         exclude_movie_ids = set(merged_ratings.keys())
+        with runtime.metrics.time_postgres("movie_genres"):
+            movie_genres = get_movie_genres_by_ids(session, list(merged_ratings.keys()))
+        liked_genres = derive_liked_genres(
+            merged_ratings,
+            movie_genres,
+            top_n=runtime.retrieval.liked_genre_count,
+        )
         with runtime.metrics.time_opensearch():
-            candidates = search_similar_movies(
-                runtime.opensearch_client,
-                runtime.opensearch_index_alias,
-                user_content_profile,
-                runtime.candidate_pool_size,
-                exclude_movie_ids,
+            candidates = retrieve_candidate_pool(
+                client=runtime.opensearch_client,
+                index_alias=runtime.opensearch_index_alias,
+                query_vector=user_content_profile,
+                liked_genres=liked_genres,
+                exclude_movie_ids=exclude_movie_ids,
+                user_id=user_id,
+                settings=runtime.retrieval,
             )
 
         # Observe the number of candidates retrieved from OpenSearch.
@@ -153,6 +163,7 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
                 title=candidate.title,
                 year=candidate.year,
                 genres=candidate.genres,
+                poster_path=candidate.poster_path or None,
                 predicted_score=predicted_score,
                 rank_position=rank_position,
             )
@@ -169,6 +180,7 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
                 experiment_id="none",
                 predicted_score=predicted_score,
                 shown_at=shown_at,
+                retrieval_source=candidate.retrieval_source,
             )
         )
 
