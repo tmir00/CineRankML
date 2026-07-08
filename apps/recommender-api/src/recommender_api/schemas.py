@@ -63,6 +63,8 @@ class RecommendationItem(BaseModel):
     poster_path: str | None = None
     predicted_score: float
     rank_position: int
+    model_role: str
+    model_version: str
 
 
 class RecommendResponse(BaseModel):
@@ -70,6 +72,7 @@ class RecommendResponse(BaseModel):
 
     request_id: str
     model_version: str
+    experiment_id: str
     recommendations: list[RecommendationItem]
 
 
@@ -80,6 +83,7 @@ class SubmitRatingRequest(BaseModel):
     rating: float = Field(ge=0.5, le=5.0)
     request_id: str | None = None
     model_version: str | None = None
+    model_role: str | None = None
     experiment_id: str | None = None
 
 

@@ -3,7 +3,78 @@
 from __future__ import annotations
 
 import numpy as np
+
+from dataclasses import dataclass, field
 from numpy.typing import NDArray
+
+
+def _profile_from_running_totals(dim: int, weighted_sum: NDArray[np.float64], total_weight: float) -> NDArray[np.float32]:
+    """
+    Build one weighted-mean embedding profile from running totals.
+
+    Do this by:
+    1. Returning a zero vector when there is no positive total weight.
+    2. Otherwise dividing the weighted sum by the total weight.
+
+
+    ============================ Arguments ============================
+    dim: Expected embedding dimension.
+    weighted_sum: Running sum of weight times embedding.
+    total_weight: Running sum of rating weights.
+
+    ============================ Returns ============================
+    Weighted mean embedding as float32.
+    """
+    # If every weight was zero or negative, the profile is a zero vector.
+    if total_weight <= 0:
+        return np.zeros(dim, dtype=np.float32)
+
+    # Return the weighted mean embedding vector.
+    return (weighted_sum / total_weight).astype(np.float32)
+
+
+@dataclass
+class WeightedEmbeddingAccumulator:
+    """
+    Track a rating-weighted embedding profile incrementally as history grows.
+
+    Do this by:
+    1. Keeping a running weighted sum and total weight.
+    2. Adding weight * embedding each time a new rated movie is observed.
+    3. Building the current profile as weighted_sum / total_weight.
+
+    Batch training uses this while walking each user's rating timeline.
+    Online inference can still call weighted_embedding_mean() on a full history list.
+    """
+
+    dim: int
+    total_weight: float = 0.0
+    weighted_sum: NDArray[np.float64] = field(init=False)
+
+    def __post_init__(self) -> None:
+        # Start with a zero running sum in float64 for numerical stability.
+        self.weighted_sum = np.zeros(self.dim, dtype=np.float64)
+
+    def observe(self, embedding: NDArray[np.float32], weight: float) -> None:
+        """
+        Add one rated movie embedding to the running profile totals.
+
+        ============================ Arguments ============================
+        embedding: The movie embedding vector.
+        weight: The rating value used as the weight.
+        """
+        # Add this movie's contribution to the running weighted sum.
+        self.weighted_sum += float(weight) * embedding.astype(np.float64)
+        self.total_weight += float(weight)
+
+    def profile(self) -> NDArray[np.float32]:
+        """
+        Build the current weighted-mean embedding profile.
+
+        ============================ Returns ============================
+        Weighted mean embedding as float32.
+        """
+        return _profile_from_running_totals(self.dim, self.weighted_sum, self.total_weight)
 
 
 def weighted_embedding_mean(embeddings: list[NDArray[np.float32]], weights: list[float]) -> NDArray[np.float32]:
@@ -38,13 +109,11 @@ def weighted_embedding_mean(embeddings: list[NDArray[np.float32]], weights: list
     if total_weight <= 0:
         return np.zeros(dim, dtype=np.float32)
 
-    # Accumulate the weighted sum of embeddings.
-    weighted_sum = np.zeros(dim, dtype=np.float64)
+    # Feed every rated movie through the same accumulator used during batch training.
+    accumulator = WeightedEmbeddingAccumulator(dim=dim)
     for embedding, weight in zip(embeddings, weights, strict=True):
-        weighted_sum += float(weight) * embedding.astype(np.float64)
-
-    # Return the weighted mean embedding vector.
-    return (weighted_sum / total_weight).astype(np.float32)
+        accumulator.observe(embedding, weight)
+    return accumulator.profile()
 
 
 def cosine_similarity(left: NDArray[np.float32], right: NDArray[np.float32]) -> float:

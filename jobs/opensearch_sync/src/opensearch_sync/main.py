@@ -117,6 +117,17 @@ def main() -> None:
         # Stop the timer.
         elapsed = time.perf_counter() - start
 
+        from common.metrics.opensearch_sync import push_opensearch_sync_metrics
+
+        push_opensearch_sync_metrics(
+            sync_settings.pushgateway_url,
+            sync_settings.metrics_job_name,
+            success=status == "success",
+            duration_seconds=elapsed,
+            records_processed=stats_processed,
+            records_failed=stats_failed,
+        )
+
         # Create a session to finish the pipeline run.
         session = session_factory()
         try:

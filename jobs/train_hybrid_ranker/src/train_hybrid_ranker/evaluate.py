@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -10,6 +13,9 @@ from botocore.client import BaseClient
 from torch.utils.data import DataLoader
 from train_hybrid_ranker.dataset import HybridParquetIterableDataset
 from common.schemas.hybrid_ranker_dataset_manifest import HybridRankerPartEntry
+
+
+logger = logging.getLogger(__name__)
 
 
 class StreamingRegressionMetrics:
@@ -42,9 +48,14 @@ class StreamingRegressionMetrics:
         return self.sum_absolute_error / self.count
 
 
-def _collate_features_batch(batch: list[tuple[list[float], float]]) -> tuple[torch.Tensor, torch.Tensor]:
-    """ Turn a list of (features, rating) rows into batched tensors. """
+def _collate_features_batch(batch: list[tuple]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Turn a list of (features, rating) rows into batched tensors."""
     features, ratings = zip(*batch)
+    if isinstance(features[0], np.ndarray):
+        return (
+            torch.from_numpy(np.stack(features, axis=0)),
+            torch.from_numpy(np.asarray(ratings, dtype=np.float32)),
+        )
     return (
         torch.tensor(features, dtype=torch.float32),
         torch.tensor(ratings, dtype=torch.float32),
@@ -72,33 +83,47 @@ def evaluate_validation_streaming(model: nn.Module, client: BaseClient, bucket: 
     ============================ Returns ============================
     A tuple of (validation_rmse, validation_mae).
     """
-    # Create an IterableDataset over validation parts without shuffling.
+    logger.info(
+        "Starting validation evaluation parts=%d batch_size=%d device=%s",
+        len(validation_parts),
+        batch_size,
+        device,
+    )
+
     dataset = HybridParquetIterableDataset(
         client,
         bucket,
         validation_parts,
         shuffle_within_part=False,
     )
-    
-    # Create a DataLoader over the IterableDataset.
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         num_workers=0,
         collate_fn=_collate_features_batch,
     )
-    
-    # Create a StreamingRegressionMetrics object to accumulate RMSE and MAE.
     metrics = StreamingRegressionMetrics()
 
-    # Set the model to evaluation mode.
     model.eval()
-    # Disable gradient computation for inference.
     with torch.no_grad():
-        for features, rating in loader:
+        for batch_index, (features, rating) in enumerate(loader, start=1):
             feature_tensor = features.to(device)
             target = rating.to(device, dtype=torch.float32)
             predictions = model(feature_tensor)
             metrics.update(predictions, target)
+            if batch_index % 50 == 0:
+                logger.info(
+                    "Validation progress batches=%d rows=%d running_rmse=%.6f",
+                    batch_index,
+                    metrics.count,
+                    metrics.rmse,
+                )
+
+    logger.info(
+        "Validation evaluation complete rows=%d rmse=%.6f mae=%.6f",
+        metrics.count,
+        metrics.rmse,
+        metrics.mae,
+    )
 
     return metrics.rmse, metrics.mae

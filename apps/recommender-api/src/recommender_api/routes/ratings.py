@@ -16,6 +16,7 @@ from recommender_api.schemas import (
     UserRatingItem,
     UserRatingsResponse,
 )
+from recommender_api.services.experiment_feedback import handle_recommendation_rating_feedback
 from recommender_api.services.rating_publisher import (
     build_api_rating_deleted_event,
     build_api_rating_event,
@@ -103,13 +104,35 @@ def create_ratings_router(runtime: InferenceRuntime, settings: RecommenderApiSet
             )
             publish_rating_event(runtime.kafka_producer, event)
             runtime.kafka_producer.flush()
+
+            if (
+                request_body.request_id
+                and request_body.model_version
+                and request_body.model_role
+                and request_body.experiment_id
+            ):
+                handle_recommendation_rating_feedback(
+                    runtime=runtime,
+                    session=session,
+                    user_id=user.user_id,
+                    request_id=request_body.request_id,
+                    movie_id=request_body.movie_id,
+                    model_version=request_body.model_version,
+                    model_role=request_body.model_role,
+                    experiment_id=request_body.experiment_id,
+                    rating=request_body.rating,
+                )
+                session.commit()
+
             runtime.metrics.record_request("ratings", "success")
             return SubmitRatingResponse(status="queued")
 
         except HTTPException:
+            session.rollback()
             raise
 
         except Exception:
+            session.rollback()
             runtime.metrics.record_error("ratings", "internal_error")
             raise
 

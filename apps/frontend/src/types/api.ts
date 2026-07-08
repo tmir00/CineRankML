@@ -40,11 +40,14 @@ export interface Recommendation {
   poster_path?: string | null
   predicted_score: number
   rank_position: number
+  model_role: string
+  model_version: string
 }
 
 export interface RecommendResponse {
   request_id: string
   model_version: string
+  experiment_id: string
   recommendations: Recommendation[]
 }
 
@@ -53,6 +56,7 @@ export interface SubmitRatingRequest {
   rating: number
   request_id?: string
   model_version?: string
+  model_role?: string
   experiment_id?: string
 }
 

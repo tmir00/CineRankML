@@ -17,6 +17,11 @@ export function RecommendationCard({ movie, recommendMeta, onRated }: Recommenda
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const modelIndicatorClass =
+    movie.model_role === 'candidate'
+      ? 'bg-emerald-500 ring-2 ring-emerald-300/60'
+      : 'bg-rose-500 ring-2 ring-rose-300/60'
+
   const handleRate = async (value: number) => {
     setSaving(true)
     setError(null)
@@ -25,8 +30,9 @@ export function RecommendationCard({ movie, recommendMeta, onRated }: Recommenda
         movie_id: movie.movie_id,
         rating: value,
         request_id: recommendMeta?.request_id,
-        model_version: recommendMeta?.model_version,
-        experiment_id: 'exp-main',
+        model_version: movie.model_version,
+        model_role: movie.model_role,
+        experiment_id: recommendMeta?.experiment_id,
       })
       setRating(value)
       setSaved(true)
@@ -50,6 +56,11 @@ export function RecommendationCard({ movie, recommendMeta, onRated }: Recommenda
         <span className="absolute right-3 top-3 rounded-full border border-cyan-400/30 bg-cyan-500/20 px-2.5 py-1 text-xs font-semibold text-cyan-100 backdrop-blur">
           {movie.predicted_score.toFixed(1)}
         </span>
+        <span
+          className={`absolute bottom-3 right-3 h-4 w-4 rounded-full ${modelIndicatorClass}`}
+          title={movie.model_role === 'candidate' ? 'New model recommendation' : 'Main model recommendation'}
+          aria-label={movie.model_role === 'candidate' ? 'New model recommendation' : 'Main model recommendation'}
+        />
         {saved ? (
           <span className="absolute bottom-14 right-3 rounded-full bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white">
             Saved

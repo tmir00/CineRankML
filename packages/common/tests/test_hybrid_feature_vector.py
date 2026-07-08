@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 
 from common.features.schema import INPUT_DIM, OFFSET_CF_COSINE, OFFSET_CONTENT_COSINE
-from common.features.similarity import cosine_similarity, elementwise_product, weighted_embedding_mean
+from common.features.similarity import (
+    WeightedEmbeddingAccumulator,
+    cosine_similarity,
+    elementwise_product,
+    weighted_embedding_mean,
+)
 from common.features.vector import build_feature_vector
 
 
@@ -41,6 +46,48 @@ def test_weighted_embedding_mean_uses_rating_weights() -> None:
     mean = weighted_embedding_mean([low, high], [1.0, 3.0])
 
     np.testing.assert_allclose(mean, [0.75, 0.75], rtol=1e-5)
+
+
+def test_weighted_embedding_accumulator_matches_weighted_embedding_mean() -> None:
+    """Each accumulator profile should match weighted_embedding_mean on the same prefix."""
+    low = np.array([0.0, 0.0], dtype=np.float32)
+    high = np.array([1.0, 1.0], dtype=np.float32)
+    mid = np.array([0.5, 0.5], dtype=np.float32)
+
+    sequences: list[tuple[list[np.ndarray], list[float]]] = [
+        ([], []),
+        ([low], [2.0]),
+        ([low, high], [1.0, 3.0]),
+        ([low, high, mid], [1.0, 3.0, 0.0]),
+    ]
+
+    for embeddings, weights in sequences:
+        accumulator = WeightedEmbeddingAccumulator(dim=2)
+        prefix_embeddings: list[np.ndarray] = []
+        prefix_weights: list[float] = []
+
+        # Before any movie is observed, the profile should be a zero vector of the known dim.
+        np.testing.assert_allclose(accumulator.profile(), np.zeros(2, dtype=np.float32))
+
+        if not embeddings:
+            continue
+
+        for embedding, weight in zip(embeddings, weights, strict=True):
+            if prefix_embeddings:
+                np.testing.assert_allclose(
+                    accumulator.profile(),
+                    weighted_embedding_mean(prefix_embeddings, prefix_weights),
+                )
+            else:
+                np.testing.assert_allclose(accumulator.profile(), np.zeros(2, dtype=np.float32))
+            accumulator.observe(embedding, weight)
+            prefix_embeddings.append(embedding)
+            prefix_weights.append(weight)
+
+        np.testing.assert_allclose(
+            accumulator.profile(),
+            weighted_embedding_mean(embeddings, weights),
+        )
 
 
 def test_elementwise_product_matches_numpy_multiply() -> None:

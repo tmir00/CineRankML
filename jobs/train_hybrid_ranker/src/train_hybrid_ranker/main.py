@@ -44,6 +44,13 @@ def main() -> None:
     run_id = str(uuid.uuid4())
     start = time.perf_counter()
 
+    logger.info(
+        "Hybrid training job starting run_id=%s job_name=%s model_version=%s",
+        run_id,
+        settings.job_name,
+        resolve_model_version(settings),
+    )
+
     stats_processed = 0
     stats_failed = 0
     error_message: str | None = None
@@ -123,16 +130,13 @@ def main() -> None:
         )
 
         logger.info(
-            "Hybrid training job finished",
-            extra={
-                "run_id": run_id,
-                "model_version": model_version,
-                "status": status,
-                "records_processed": stats_processed,
-                "records_failed": stats_failed,
-                "best_validation_rmse": best_validation_rmse,
-                "duration_seconds": elapsed,
-            },
+            "Hybrid training job finished run_id=%s model_version=%s status=%s "
+            "best_validation_rmse=%s duration_seconds=%.1f",
+            run_id,
+            model_version,
+            status,
+            best_validation_rmse,
+            elapsed,
         )
 
 

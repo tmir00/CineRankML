@@ -33,6 +33,8 @@ from common.mlflow.hybrid_run import (
     start_hybrid_training_run,
 )
 
+from common.mlflow.registry import assign_main_or_candidate_alias
+
 
 from common.storage.hybrid_ranker_dataset_reader import (
     load_hybrid_ranker_dataset_manifest,
@@ -256,6 +258,14 @@ def run_hybrid_evaluation(client: BaseClient, settings: EvaluateModelSettings, *
                 settings.s3_bucket,
                 hybrid_ranker_model_manifest_object_key(model_version),
                 manifest.model_dump(mode="json"),
+            )
+
+        if model_config.mlflow_run_id:
+            assign_main_or_candidate_alias(
+                tracking_uri=settings.mlflow_tracking_uri,
+                registered_model_name=settings.mlflow_registered_model_name,
+                mlflow_run_id=model_config.mlflow_run_id,
+                model_version=model_version,
             )
 
     # Log the evaluation complete.

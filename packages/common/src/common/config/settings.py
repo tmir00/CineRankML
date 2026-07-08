@@ -205,6 +205,11 @@ class SyncSettings(BaseSettings):
     rebuild_index: bool = False
     sync_log_every_n: int = 100
     job_name: str = "opensearch_sync"
+    metrics_job_name: str = Field(
+        default="opensearch_sync",
+        validation_alias=AliasChoices("OPENSEARCH_SYNC_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
 
     @field_validator("sync_limit", mode="before")
     @classmethod
@@ -383,9 +388,22 @@ class CreateFeaturesSettings(BaseSettings):
         validation_alias=AliasChoices("CONTENT_EMBEDDING_VERSION", "EMBEDDING_VERSION"),
     )
     hybrid_part_row_limit: int = Field(
-        default=500_000,
+        default=100_000,
         validation_alias=AliasChoices("HYBRID_PART_ROW_LIMIT"),
     )
+    hybrid_progress_log_every_n: int = Field(
+        default=5000,
+        validation_alias=AliasChoices("HYBRID_PROGRESS_LOG_EVERY_N", "PROGRESS_LOG_EVERY_N"),
+    )
+    hybrid_rating_fetch_batch_size: int = Field(
+        default=5000,
+        validation_alias=AliasChoices("HYBRID_RATING_FETCH_BATCH_SIZE"),
+    )
+    hybrid_user_batch_size: int = Field(
+        default=2000,
+        validation_alias=AliasChoices("HYBRID_USER_BATCH_SIZE"),
+    )
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     job_name: str = "create_features"
     metrics_job_name: str = Field(
         default="create_features",
@@ -441,7 +459,11 @@ class HybridTrainingSettings(BaseSettings):
     )
     mlflow_experiment_name: str = Field(
         default="hybrid_ranker",
-        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME"),
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME", "MLFLOW_EXPERIMENT_NAME_HYBRID"),
+    )
+    mlflow_registered_model_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_REGISTERED_MODEL_NAME"),
     )
     job_name: str = "train_hybrid_ranker"
     metrics_job_name: str = Field(
@@ -482,7 +504,11 @@ class EvaluateModelSettings(BaseSettings):
     )
     mlflow_experiment_name: str = Field(
         default="hybrid_ranker",
-        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME"),
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME", "MLFLOW_EXPERIMENT_NAME_HYBRID"),
+    )
+    mlflow_registered_model_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_REGISTERED_MODEL_NAME"),
     )
     job_name: str = "evaluate_model"
     metrics_job_name: str = Field(

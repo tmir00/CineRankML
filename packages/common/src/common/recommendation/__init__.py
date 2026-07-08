@@ -1,1 +1,1 @@
-"""Derive user taste signals from rating history for online retrieval."""
+"""Online recommendation experiment helpers."""

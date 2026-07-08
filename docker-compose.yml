@@ -52,6 +52,7 @@ services:
       - stream
       - ratings
       - tags
+      - api
     ports:
       - "${KAFKA_PORT:-9092}:9092"
     environment:
@@ -266,6 +267,7 @@ services:
     container_name: cinerankml-opensearch
     profiles:
       - search
+      - api
     environment:
       discovery.type: single-node
       plugins.security.disabled: "true"
@@ -378,6 +380,7 @@ services:
     profiles:
       - snapshots
       - ml
+      - api
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
@@ -402,6 +405,7 @@ services:
     profiles:
       - snapshots
       - ml
+      - api
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
@@ -436,6 +440,7 @@ services:
     profiles:
       - snapshots
       - ml
+      - api
     env_file:
       - .env
     environment:
@@ -513,6 +518,7 @@ services:
     container_name: cinerankml-train-cf
     profiles:
       - ml
+    gpus: all
     env_file:
       - .env
     environment:
@@ -577,7 +583,11 @@ services:
       DATASET_VERSION: ${DATASET_VERSION:-}
       FEATURE_SCHEMA_VERSION: ${FEATURE_SCHEMA_VERSION:-hybrid-v1}
       CONTENT_EMBEDDING_VERSION: ${CONTENT_EMBEDDING_VERSION:-content-v1}
-      HYBRID_PART_ROW_LIMIT: ${HYBRID_PART_ROW_LIMIT:-500000}
+      HYBRID_PART_ROW_LIMIT: ${HYBRID_PART_ROW_LIMIT:-100000}
+      HYBRID_PROGRESS_LOG_EVERY_N: ${HYBRID_PROGRESS_LOG_EVERY_N:-5000}
+      HYBRID_RATING_FETCH_BATCH_SIZE: ${HYBRID_RATING_FETCH_BATCH_SIZE:-5000}
+      HYBRID_USER_BATCH_SIZE: ${HYBRID_USER_BATCH_SIZE:-2000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       HYBRID_METRICS_JOB_NAME: ${HYBRID_METRICS_JOB_NAME:-create_features}
     depends_on:
       postgres:
@@ -590,8 +600,6 @@ services:
         condition: service_completed_successfully
       pushgateway:
         condition: service_started
-      train-cf:
-        condition: service_completed_successfully
     restart: "no"
     networks:
       - cinerankml
@@ -605,6 +613,7 @@ services:
     container_name: cinerankml-train-hybrid-ranker
     profiles:
       - ml
+    gpus: all
     env_file:
       - .env
     environment:
@@ -639,8 +648,6 @@ services:
         condition: service_started
       mlflow:
         condition: service_started
-      create-features:
-        condition: service_completed_successfully
     restart: "no"
     networks:
       - cinerankml
@@ -654,6 +661,7 @@ services:
     container_name: cinerankml-evaluate-model
     profiles:
       - ml
+    gpus: all
     env_file:
       - .env
     environment:
@@ -665,6 +673,7 @@ services:
       PUSHGATEWAY_URL: http://pushgateway:9091
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME_HYBRID:-hybrid_ranker}
+      MLFLOW_REGISTERED_MODEL_NAME: ${MLFLOW_REGISTERED_MODEL_NAME:-hybrid_ranker}
       MODEL_VERSION: ${MODEL_VERSION:-}
       DATASET_VERSION: ${DATASET_VERSION:-}
       HYBRID_BATCH_SIZE: ${HYBRID_BATCH_SIZE:-4096}
@@ -690,7 +699,7 @@ services:
       - cinerankml
 
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.22.0
+    image: ghcr.io/mlflow/mlflow:v3.14.0
     container_name: cinerankml-mlflow
     profiles:
       - ml
@@ -721,12 +730,16 @@ services:
         exec mlflow server \
           --host 0.0.0.0 \
           --port 5000 \
+          --allowed-hosts "$${MLFLOW_SERVER_ALLOWED_HOSTS}" \
           --backend-store-uri postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/mlflow \
           --default-artifact-root /mlflow/artifacts
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-cinerankml}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinerankml}
       POSTGRES_DB: ${POSTGRES_DB:-cinerankml}
+      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow:*,localhost:*"
     volumes:
       - mlflowdata:/mlflow/artifacts
     ports:
@@ -806,6 +819,11 @@ services:
       MIN_RATINGS_FOR_RECOMMEND: ${MIN_RATINGS_FOR_RECOMMEND:-5}
       MODEL_VERSION: ${MODEL_VERSION:-}
       CF_VERSION: ${CF_VERSION:-}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_REGISTERED_MODEL_NAME: ${MLFLOW_REGISTERED_MODEL_NAME:-hybrid_ranker}
+      EXPERIMENT_ID: ${EXPERIMENT_ID:-exp-main-vs-candidate}
+      INITIAL_MAIN_SPLIT: ${INITIAL_MAIN_SPLIT:-0.70}
+      INITIAL_CANDIDATE_SPLIT: ${INITIAL_CANDIDATE_SPLIT:-0.30}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5173}
     ports:
       - "8090:8090"

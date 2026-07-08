@@ -18,13 +18,15 @@ from create_features.version import resolve_dataset_version
 logger = logging.getLogger(__name__)
 
 
-def configure_logging() -> None:
+def configure_logging(level: str = "INFO") -> None:
     """Set up basic structured logging for the create_features job."""
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         stream=sys.stdout,
     )
+    for noisy_logger in ("botocore", "boto3", "urllib3"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
 def main() -> None:
@@ -37,8 +39,8 @@ def main() -> None:
     3. Writing manifest.json last and pushing metrics to Pushgateway.
     """
     # Configure logging and load settings.
-    configure_logging()
     settings = get_create_features_settings()
+    configure_logging(settings.log_level)
     run_id = str(uuid.uuid4())
     start = time.perf_counter()
 
@@ -64,6 +66,12 @@ def main() -> None:
         raise
     finally:
         session.close()
+
+    logger.info(
+        "create_features job started run_id=%s dataset_version=%s",
+        run_id,
+        dataset_version,
+    )
 
     # Run hybrid feature generation.
     try:
@@ -126,32 +134,18 @@ def main() -> None:
             quality=quality_stats,
         )
 
-        log_extra = {
-            "run_id": run_id,
-            "dataset_version": dataset_version,
-            "status": status,
-            "records_processed": stats_processed,
-            "records_failed": stats_failed,
-            "train_row_count": train_row_count,
-            "validation_row_count": validation_row_count,
-            "test_row_count": test_row_count,
-            "duration_seconds": elapsed,
-        }
-        if quality_stats is not None:
-            log_extra.update(
-                {
-                    "row_count_delta_vs_cf": quality_stats.row_count_delta_vs_cf,
-                    "cold_start_fraction": quality_stats.cold_start_fraction,
-                    "users_processed": quality_stats.users_processed,
-                    "join_dropped_candidates": quality_stats.join_dropped_candidates,
-                    "missing_content_embedding_rows": quality_stats.missing_content_embedding_rows,
-                    "missing_cf_embedding_rows": quality_stats.missing_cf_embedding_rows,
-                }
-            )
-
         logger.info(
-            "create_features job finished",
-            extra=log_extra,
+            "create_features job finished run_id=%s dataset_version=%s status=%s "
+            "records_processed=%s train_row_count=%s validation_row_count=%s "
+            "test_row_count=%s duration_seconds=%.1f",
+            run_id,
+            dataset_version,
+            status,
+            stats_processed,
+            train_row_count,
+            validation_row_count,
+            test_row_count,
+            elapsed,
         )
 
 

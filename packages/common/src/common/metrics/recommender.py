@@ -6,7 +6,7 @@ import time
 
 from typing import Generator
 from contextlib import contextmanager
-from prometheus_client import Counter, Histogram, start_http_server
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 
 class RecommenderMetrics:
@@ -78,6 +78,11 @@ class RecommenderMetrics:
             "Number of recommendations returned per request",
             [],
             buckets=(0, 1, 5, 10, 20, 50),
+        )
+        self.experiment_split_fraction = Gauge(
+            "experiment_split_fraction",
+            "Current main/candidate recommendation split fraction",
+            ["model_role"],
         )
 
     def start_server(self, port: int) -> None:
@@ -154,3 +159,7 @@ class RecommenderMetrics:
     def observe_recommendations_returned(self, count: int) -> None:
         """Record how many recommendations were returned to the client."""
         self.recommendations_returned_count.observe(count)
+
+    def set_experiment_split_fraction(self, model_role: str, fraction: float) -> None:
+        """Update the current online experiment split fraction gauge."""
+        self.experiment_split_fraction.labels(model_role=model_role).set(fraction)
