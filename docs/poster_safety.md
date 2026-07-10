@@ -17,6 +17,13 @@ There is no request-time moderation call.
   - `categories["sexual/minors"]`
   - `category_scores.sexual > sexual_score_threshold` (default `0.35`)
 
+## OpenSearch retrieval
+
+Movies with `poster_safe=false` are excluded from **all** OpenSearch retrieval
+paths (title search, kNN similarity, popular-by-genre, and random-by-genre).
+The frontend still uses `show_poster` / `poster_safe` to hide images when a
+movie appears from a non-OpenSearch source (for example user ratings).
+
 ## Prerequisites
 
 Set `OPENAI_API_KEY` in the repository root `.env` before running the checker.
