@@ -61,6 +61,9 @@ def create_ratings_router(runtime: InferenceRuntime, settings: RecommenderApiSet
                         year=row.year,
                         genres=row.genres,
                         poster_path=row.poster_path,
+                        poster_safe=row.poster_safe,
+                        show_poster=row.show_poster,
+                        certification_us=row.certification_us,
                         rating=row.rating,
                         rated_at=row.rated_at,
                     )

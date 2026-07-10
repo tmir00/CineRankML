@@ -61,6 +61,9 @@ class RecommendationItem(BaseModel):
     year: int | None
     genres: list[str]
     poster_path: str | None = None
+    poster_safe: bool = True
+    show_poster: bool = True
+    certification_us: str | None = None
     predicted_score: float
     rank_position: int
     model_role: str
@@ -107,6 +110,9 @@ class UserRatingItem(BaseModel):
     year: int | None
     genres: list[str]
     poster_path: str | None = None
+    poster_safe: bool = True
+    show_poster: bool = True
+    certification_us: str | None = None
     rating: float
     rated_at: datetime
 
@@ -125,6 +131,9 @@ class MovieSearchItem(BaseModel):
     year: int | None
     genres: list[str]
     poster_path: str | None = None
+    poster_safe: bool = True
+    show_poster: bool = True
+    certification_us: str | None = None
 
 
 class MovieSearchResponse(BaseModel):

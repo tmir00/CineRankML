@@ -30,6 +30,9 @@ class CandidateMovieDoc:
     tmdb_vote_count: int | None
     content_embedding: list[float]
     poster_path: str | None = None
+    poster_safe: bool = True
+    show_poster: bool = True
+    certification_us: str | None = None
     retrieval_source: str = RETRIEVAL_SOURCE_KNN
 
 
@@ -84,6 +87,9 @@ def _parse_candidate_hit(
         tmdb_vote_count=source.get("tmdb_vote_count"),
         content_embedding=list(embedding),
         poster_path=source.get("poster_path"),
+        poster_safe=bool(source.get("poster_safe", True)),
+        show_poster=bool(source.get("show_poster", True)),
+        certification_us=source.get("certification_us"),
         retrieval_source=retrieval_source,
     )
 

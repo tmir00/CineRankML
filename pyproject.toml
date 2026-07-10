@@ -8,6 +8,7 @@ dependencies = []
 [tool.uv.workspace]
 members = [
     "packages/common",
+    "scripts",
     "workers/ratings-producer",
     "workers/tags-producer",
     "workers/ratings-consumer",
