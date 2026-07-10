@@ -1,0 +1,12 @@
+# Tell Grafana where to find the datasource (Prometheus)..
+apiVersion: 1
+
+datasources: # This is the list of data sources Grafana will automatically create when it starts.
+
+  - name: Prometheus          # Display name in Grafana UI
+    type: prometheus          # What kind of data source is this? (Prometheus)
+    uid: prometheus           # Stable ID panels reference
+    access: proxy             # Grafana backend calls Prometheus
+    url: http://prometheus:9090   # Host name for the data source.
+    isDefault: true           # This makes prometheus the default data source for new panels.
+    editable: false           # Can't edit the data source in the Grafana UI.

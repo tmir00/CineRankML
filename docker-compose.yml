@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cinerankml-postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cinerankml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinerankml}
+      POSTGRES_DB: ${POSTGRES_DB:-cinerankml}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cinerankml} -d ${POSTGRES_DB:-cinerankml}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cinerankml
+
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/docker/migrate/Dockerfile
+    container_name: cinerankml-migrate
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - cinerankml
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: cinerankml-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}?sslmode=disable"
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - cinerankml
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: cinerankml-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres-exporter:
+        condition: service_started
+    networks:
+      - cinerankml
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: cinerankml-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+    networks:
+      - cinerankml
+
+volumes:
+  pgdata:
+
+networks:
+  cinerankml:
+    driver: bridge
