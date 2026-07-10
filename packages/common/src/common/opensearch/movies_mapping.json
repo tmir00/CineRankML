@@ -1,0 +1,39 @@
+{
+  "settings": {
+    "index": {
+      "knn": true,
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "properties": {
+      "movie_id": { "type": "integer" },
+      "title": { "type": "text", "fields": { "keyword": { "type": "keyword" } } },
+      "year": { "type": "integer" },
+      "genres": { "type": "keyword" },
+      "tags": { "type": "keyword" },
+      "overview": { "type": "text" },
+      "tagline": { "type": "text" },
+      "original_language": { "type": "keyword" },
+      "tmdb_keywords": { "type": "keyword" },
+      "runtime": { "type": "integer" },
+      "tmdb_popularity": { "type": "float" },
+      "tmdb_vote_average": { "type": "float" },
+      "tmdb_vote_count": { "type": "integer" },
+      "tmdb_id": { "type": "integer" },
+      "imdb_id": { "type": "keyword" },
+      "poster_path": { "type": "keyword" },
+      "embedding_version": { "type": "keyword" },
+      "content_embedding": {
+        "type": "knn_vector",
+        "dimension": 384,
+        "method": {
+          "name": "hnsw",
+          "space_type": "cosinesimil",
+          "engine": "lucene"
+        }
+      }
+    }
+  }
+}

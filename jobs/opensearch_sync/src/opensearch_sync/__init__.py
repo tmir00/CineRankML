@@ -1,0 +1,1 @@
+"""OpenSearch sync batch job."""

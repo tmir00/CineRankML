@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 
 from common.config.settings import get_kafka_settings, get_worker_metrics_settings
 from common.db.repositories.dead_letter import insert_dead_letter_event
@@ -11,19 +10,11 @@ from common.db.session import get_session_factory
 from common.kafka.consumer import GracefulShutdown, KafkaEventConsumer, run_consumer_loop
 from common.metrics.worker import WorkerMetrics
 from common.schemas.events import TagCreatedEvent
+from common.logging_config import configure_worker_logging
 
 from tags_consumer.handler import process_tag_event
 
 logger = logging.getLogger(__name__)
-
-
-def configure_logging() -> None:
-    """Set up basic structured logging for the consumer process."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        stream=sys.stdout,
-    )
 
 
 def save_dead_letter(**kwargs: object) -> None:
@@ -61,11 +52,10 @@ def main() -> None:
     2. Subscribing to the tags topic.
     3. Running the shared consumer loop with the tag write handler.
     """
-    configure_logging()
-
-    # Get the Kafka and metrics settings.
-    kafka_settings = get_kafka_settings()
     metrics_settings = get_worker_metrics_settings()
+    configure_worker_logging(metrics_settings.log_level)
+
+    kafka_settings = get_kafka_settings()
     # Create the WorkerMetrics instance.
     metrics = WorkerMetrics(metrics_settings.worker_name)
     # Start the metrics HTTP server.
@@ -89,6 +79,7 @@ def main() -> None:
         metrics=metrics,
         process_event=process_tag_event,
         shutdown=shutdown,
+        progress_log_every_n=metrics_settings.progress_log_every_n,
     )
 
 

@@ -1,7 +1,7 @@
 from typing import Self
 from pathlib import Path
 
-from pydantic import field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,7 @@ class ProducerSettings(BaseSettings):
     start_row: int = 0
     producer_log_every_n: int = 1000
     checkpoint_every_n: int = 1000
+    progress_log_every_n: int = Field(default=10000, validation_alias="PROGRESS_LOG_EVERY_N")
 
     @model_validator(mode="after")
     def _default_source_file(self) -> Self:
@@ -76,6 +77,49 @@ class WorkerMetricsSettings(BaseSettings):
 
     metrics_port: int = 9100
     worker_name: str = "worker"
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    progress_log_every_n: int = Field(default=10000, validation_alias="PROGRESS_LOG_EVERY_N")
+
+
+class TmdbSettings(BaseSettings):
+    """TMDB API client settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    tmdb_api_key: str = ""
+    tmdb_base_url: str = "https://api.themoviedb.org"
+    tmdb_requests_per_second: float = 3.0
+    tmdb_timeout_seconds: float = 30.0
+    tmdb_max_retries: int = 3
+
+
+class CatalogSeedSettings(BaseSettings):
+    """MovieLens CSV paths and seed batch size."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    movies_csv_path: str = "/data/movies.csv"
+    links_csv_path: str = "/data/links.csv"
+    seed_batch_size: int = 1000
+
+
+class EnrichmentSettings(BaseSettings):
+    """TMDB enrichment batch job settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    enrichment_batch_size: int = 50
+    enrichment_limit: int | None = None
+    enrichment_log_every_n: int = 100
+    enrich_all: bool = Field(default=False, validation_alias="ENRICH_ALL")
+
+    @field_validator("enrichment_limit", mode="before")
+    @classmethod
+    def _empty_enrichment_limit(cls, value: object) -> object:
+        """Treat empty env values as no limit."""
+        if value == "" or value is None:
+            return None
+        return value
 
 
 def get_database_settings() -> DatabaseSettings:
@@ -110,4 +154,378 @@ def producer_row_delay_seconds(settings: ProducerSettings) -> float:
 
 def get_worker_metrics_settings() -> WorkerMetricsSettings:
     return WorkerMetricsSettings()
+
+
+def get_tmdb_settings() -> TmdbSettings:
+    return TmdbSettings()
+
+
+def get_catalog_seed_settings() -> CatalogSeedSettings:
+    return CatalogSeedSettings()
+
+
+def get_enrichment_settings() -> EnrichmentSettings:
+    return EnrichmentSettings()
+
+
+class OpenSearchSettings(BaseSettings):
+    """OpenSearch connection and index settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    opensearch_host: str = "localhost"
+    opensearch_port: int = 9200
+    opensearch_use_ssl: bool = False
+    opensearch_verify_certs: bool = False
+    opensearch_timeout_seconds: float = 30.0
+    opensearch_index_alias: str = "movies"
+    opensearch_bulk_batch_size: int = 100
+
+
+class EmbedderSettings(BaseSettings):
+    """HTTP client settings for the embedder-api service."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    embedder_base_url: str = "http://localhost:8080"
+    embedder_timeout_seconds: float = 60.0
+    embedding_version: str = "content-v1"
+    embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dimension: int = 384
+    embedding_text_template_version: str = "v1"
+
+
+class SyncSettings(BaseSettings):
+    """OpenSearch sync batch job settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    sync_batch_size: int = 50
+    sync_limit: int | None = None
+    rebuild_index: bool = False
+    sync_log_every_n: int = 100
+    job_name: str = "opensearch_sync"
+    metrics_job_name: str = Field(
+        default="opensearch_sync",
+        validation_alias=AliasChoices("OPENSEARCH_SYNC_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("sync_limit", mode="before")
+    @classmethod
+    def _empty_sync_limit(cls, value: object) -> object:
+        """Treat empty env values as no limit."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_opensearch_settings() -> OpenSearchSettings:
+    return OpenSearchSettings()
+
+
+def get_embedder_settings() -> EmbedderSettings:
+    return EmbedderSettings()
+
+
+def get_sync_settings() -> SyncSettings:
+    return SyncSettings()
+
+
+class SnapshotSettings(BaseSettings):
+    """Snapshot-to-S3 batch job and MinIO settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    snapshot_batch_size: int = 50_000
+    snapshot_id: str | None = None
+    job_name: str = "snapshot_to_s3"
+    metrics_job_name: str = "s3_snapshot"
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("snapshot_id", mode="before")
+    @classmethod
+    def _empty_snapshot_id(cls, value: object) -> object:
+        """Treat empty env values as auto-generated snapshot id."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_snapshot_settings() -> SnapshotSettings:
+    return SnapshotSettings()
+
+
+class CfDatasetSettings(BaseSettings):
+    """CF dataset prep batch job and MinIO settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    snapshot_id: str | None = None
+    cf_dataset_version: str | None = None
+    cf_shuffle_seed: int = 42
+    train_fraction: float = Field(
+        default=0.8,
+        validation_alias=AliasChoices("CF_TRAIN_FRACTION", "TRAIN_FRACTION"),
+    )
+    validation_fraction: float = Field(
+        default=0.1,
+        validation_alias=AliasChoices("CF_VALIDATION_FRACTION"),
+    )
+    test_fraction: float = Field(
+        default=0.1,
+        validation_alias=AliasChoices("CF_TEST_FRACTION"),
+    )
+    cf_part_row_limit: int = 500_000
+    job_name: str = "prepare_cf_dataset"
+    metrics_job_name: str = Field(
+        default="prepare_cf_dataset",
+        validation_alias=AliasChoices("CF_DATASET_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("snapshot_id", "cf_dataset_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Treat empty env values as auto-generated ids."""
+        if value == "" or value is None:
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _split_fractions_sum_to_one(self) -> Self:
+        """Train, validation, and test fractions must sum to 1.0."""
+        total = self.train_fraction + self.validation_fraction + self.test_fraction
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                "CF split fractions must sum to 1.0 "
+                f"(train={self.train_fraction}, validation={self.validation_fraction}, "
+                f"test={self.test_fraction})"
+            )
+        return self
+
+
+def get_cf_dataset_settings() -> CfDatasetSettings:
+    return CfDatasetSettings()
+
+
+class CfTrainingSettings(BaseSettings):
+    """CF PyTorch training batch job, MinIO, MLflow, and metrics settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    cf_dataset_version: str | None = None
+    cf_version: str | None = None
+    embedding_dim: int = Field(default=64, validation_alias=AliasChoices("CF_EMBEDDING_DIM"))
+    num_epochs: int = Field(default=20, validation_alias=AliasChoices("CF_EPOCHS"))
+    batch_size: int = Field(default=4096, validation_alias=AliasChoices("CF_BATCH_SIZE"))
+    learning_rate: float = Field(default=0.01, validation_alias=AliasChoices("CF_LEARNING_RATE"))
+    early_stopping_patience: int = Field(
+        default=3,
+        validation_alias=AliasChoices("CF_EARLY_STOPPING_PATIENCE"),
+    )
+    shuffle_seed: int = Field(default=42, validation_alias=AliasChoices("CF_SHUFFLE_SEED"))
+    device: str = Field(default="auto", validation_alias=AliasChoices("CF_DEVICE"))
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices("MLFLOW_TRACKING_URI"),
+    )
+    mlflow_experiment_name: str = Field(
+        default="collaborative_filtering",
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME"),
+    )
+    job_name: str = "train_cf"
+    metrics_job_name: str = Field(
+        default="train_cf",
+        validation_alias=AliasChoices("CF_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("cf_dataset_version", "cf_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """ Set unset env values as None instead of an empty string. """
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_cf_training_settings() -> CfTrainingSettings:
+    return CfTrainingSettings()
+
+
+class CreateFeaturesSettings(BaseSettings):
+    """Hybrid feature generation batch job and MinIO settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    snapshot_id: str | None = None
+    cf_dataset_version: str | None = None
+    cf_version: str | None = None
+    dataset_version: str | None = None
+    feature_schema_version: str = Field(
+        default="hybrid-v1",
+        validation_alias=AliasChoices("FEATURE_SCHEMA_VERSION"),
+    )
+    content_embedding_version: str = Field(
+        default="content-v1",
+        validation_alias=AliasChoices("CONTENT_EMBEDDING_VERSION", "EMBEDDING_VERSION"),
+    )
+    hybrid_part_row_limit: int = Field(
+        default=100_000,
+        validation_alias=AliasChoices("HYBRID_PART_ROW_LIMIT"),
+    )
+    hybrid_progress_log_every_n: int = Field(
+        default=5000,
+        validation_alias=AliasChoices("HYBRID_PROGRESS_LOG_EVERY_N", "PROGRESS_LOG_EVERY_N"),
+    )
+    hybrid_rating_fetch_batch_size: int = Field(
+        default=5000,
+        validation_alias=AliasChoices("HYBRID_RATING_FETCH_BATCH_SIZE"),
+    )
+    hybrid_user_batch_size: int = Field(
+        default=2000,
+        validation_alias=AliasChoices("HYBRID_USER_BATCH_SIZE"),
+    )
+    log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    job_name: str = "create_features"
+    metrics_job_name: str = Field(
+        default="create_features",
+        validation_alias=AliasChoices("HYBRID_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator(
+        "snapshot_id",
+        "cf_dataset_version",
+        "cf_version",
+        "dataset_version",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Treat empty env values as auto-generated ids."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_create_features_settings() -> CreateFeaturesSettings:
+    return CreateFeaturesSettings()
+
+
+class HybridTrainingSettings(BaseSettings):
+    """Hybrid ranker PyTorch training batch job, MinIO, MLflow, and metrics settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    dataset_version: str | None = None
+    model_version: str | None = None
+    input_dim: int = Field(default=1356, validation_alias=AliasChoices("HYBRID_INPUT_DIM"))
+    hidden_dims: list[int] = Field(default_factory=lambda: [512, 256, 64])
+    dropout: float = Field(default=0.1, validation_alias=AliasChoices("HYBRID_DROPOUT"))
+    num_epochs: int = Field(default=20, validation_alias=AliasChoices("HYBRID_EPOCHS"))
+    batch_size: int = Field(default=4096, validation_alias=AliasChoices("HYBRID_BATCH_SIZE"))
+    learning_rate: float = Field(default=0.001, validation_alias=AliasChoices("HYBRID_LEARNING_RATE"))
+    early_stopping_patience: int = Field(
+        default=3,
+        validation_alias=AliasChoices("HYBRID_EARLY_STOPPING_PATIENCE"),
+    )
+    shuffle_seed: int = Field(default=42, validation_alias=AliasChoices("HYBRID_SHUFFLE_SEED"))
+    device: str = Field(default="auto", validation_alias=AliasChoices("HYBRID_DEVICE"))
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices("MLFLOW_TRACKING_URI"),
+    )
+    mlflow_experiment_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME", "MLFLOW_EXPERIMENT_NAME_HYBRID"),
+    )
+    mlflow_registered_model_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_REGISTERED_MODEL_NAME"),
+    )
+    job_name: str = "train_hybrid_ranker"
+    metrics_job_name: str = Field(
+        default="train_hybrid_ranker",
+        validation_alias=AliasChoices("HYBRID_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("dataset_version", "model_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Set unset env values as None instead of an empty string."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_hybrid_training_settings() -> HybridTrainingSettings:
+    return HybridTrainingSettings()
+
+
+class EvaluateModelSettings(BaseSettings):
+    """Hybrid ranker evaluation batch job, MinIO, MLflow, and metrics settings."""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    s3_endpoint_url: str = "http://localhost:9000"
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_bucket: str = "cinerankml"
+    model_version: str | None = None
+    dataset_version: str | None = None
+    batch_size: int = Field(default=4096, validation_alias=AliasChoices("HYBRID_BATCH_SIZE", "EVAL_BATCH_SIZE"))
+    device: str = Field(default="auto", validation_alias=AliasChoices("HYBRID_DEVICE", "EVAL_DEVICE"))
+    mlflow_tracking_uri: str = Field(
+        default="http://localhost:5000",
+        validation_alias=AliasChoices("MLFLOW_TRACKING_URI"),
+    )
+    mlflow_experiment_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_EXPERIMENT_NAME", "MLFLOW_EXPERIMENT_NAME_HYBRID"),
+    )
+    mlflow_registered_model_name: str = Field(
+        default="hybrid_ranker",
+        validation_alias=AliasChoices("MLFLOW_REGISTERED_MODEL_NAME"),
+    )
+    job_name: str = "evaluate_model"
+    metrics_job_name: str = Field(
+        default="evaluate_model",
+        validation_alias=AliasChoices("EVAL_METRICS_JOB_NAME", "METRICS_JOB_NAME"),
+    )
+    pushgateway_url: str = "http://localhost:9091"
+
+    @field_validator("model_version", "dataset_version", mode="before")
+    @classmethod
+    def _empty_optional_ids(cls, value: object) -> object:
+        """Set unset env values as None instead of an empty string."""
+        if value == "" or value is None:
+            return None
+        return value
+
+
+def get_evaluate_model_settings() -> EvaluateModelSettings:
+    return EvaluateModelSettings()
 

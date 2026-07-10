@@ -6,9 +6,15 @@ from common.db.models.events import RatingsEvent, TagEvent
 from common.db.models.checkpoints import CsvIngestionCheckpoint
 from common.db.models.embeddings import EmbeddingVersion, MovieContentEmbedding
 from common.db.models.catalog import CatalogDirtyMovie, CatalogMovie, MovieTagCount
-from common.db.models.recommendations import RecommendationImpression, RecommendationRating
+from common.db.models.recommendations import (
+    RecommendationExperiment,
+    RecommendationImpression,
+    RecommendationRating,
+)
+from common.db.models.users import AppUser, UserSession
 
 __all__ = [
+    "AppUser",
     "CatalogDirtyMovie",
     "CatalogMovie",
     "CsvIngestionCheckpoint",
@@ -18,7 +24,9 @@ __all__ = [
     "MovieTagCount",
     "PipelineRun",
     "RatingsEvent",
+    "RecommendationExperiment",
     "RecommendationImpression",
     "RecommendationRating",
     "TagEvent",
+    "UserSession",
 ]

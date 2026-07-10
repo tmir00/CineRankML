@@ -1,0 +1,33 @@
+[project]
+name = "create-features"
+version = "0.1.0"
+description = "Build hybrid ranker train/validation/test feature datasets from frozen MinIO artifacts"
+requires-python = ">=3.12"
+dependencies = [
+    "common",
+    "duckdb>=1.0",
+    "numpy>=2.0",
+    "pyarrow>=18.0",
+]
+
+[project.scripts]
+create-features = "create_features.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/create_features"]
+
+[tool.uv.sources]
+common = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -26,3 +26,12 @@ providers: # This is the list of dashboard providers Grafana will automatically 
     # "path" tells Grafana where to find the JSON dashboard files.
     options:
       path: /var/lib/grafana/dashboards
+
+  - name: ml-pipeline
+    orgId: 1
+    folder: ML Pipeline
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards/ml-pipeline

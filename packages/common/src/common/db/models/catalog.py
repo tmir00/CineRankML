@@ -22,7 +22,9 @@ class CatalogMovie(Base):
     tmdb_popularity: Mapped[float | None] = mapped_column(Float, nullable=True)
     tmdb_vote_average: Mapped[float | None] = mapped_column(Float, nullable=True)
     tmdb_vote_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    poster_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     enrichment_status: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enrichment_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

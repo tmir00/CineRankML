@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-display: "Inter", system-ui, sans-serif;
+}
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply m-0 min-h-screen bg-slate-950 text-slate-200 font-sans;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(120, 53, 180, 0.25), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(225, 29, 72, 0.12), transparent),
+      linear-gradient(to bottom, #020617, #0f172a);
+    background-attachment: fixed;
+  }
+
+  #root {
+    @apply min-h-screen;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply rounded-2xl border border-white/10 bg-slate-900/60 backdrop-blur-md;
+  }
+
+  .gradient-accent {
+    @apply bg-gradient-to-r from-rose-500 via-purple-500 to-violet-500;
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-rose-300 via-purple-300 to-cyan-300 bg-clip-text text-transparent;
+  }
+}

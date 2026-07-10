@@ -11,6 +11,13 @@ dependencies = [
     "pydantic-settings>=2.0",
     "confluent-kafka>=2.6",
     "prometheus-client>=0.21",
+    "httpx>=0.27",
+    "opensearch-py>=2.7",
+    "boto3>=1.35",
+    "pyarrow>=18.0",
+    "duckdb>=1.0",
+    "mlflow==3.14.0",
+    "numpy>=2.0",
 ]
 
 [build-system]
@@ -19,3 +26,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/common"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/common/opensearch/movies_mapping.json" = "common/opensearch/movies_mapping.json"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

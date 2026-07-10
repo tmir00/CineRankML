@@ -96,3 +96,45 @@ def mark_movie_dirty_if_catalog_exists(session: Session, movie_id: int) -> bool:
     )
     session.execute(stmt)
     return True
+
+
+def fetch_top_tags_for_movies(session: Session, movie_ids: list[int], limit_per_movie: int = 10) -> dict[int, list[str]]:
+    """
+    Load the most popular tags for a batch of movies.
+
+    Do this by:
+    1. Selecting tag rows for the requested movie ids.
+    2. Ordering by count descending within each movie.
+    3. Returning up to limit_per_movie tags per movie.
+
+    ============================ Arguments ============================
+    session: An open SQLAlchemy session.
+    movie_ids: Movies whose tags should be loaded.
+    limit_per_movie: Maximum tags to keep per movie.
+
+    ============================ Returns ============================
+    Mapping of movie_id to ordered tag strings.
+    """
+    # If there are no movie ids to look up, return an empty dictionary.
+    if not movie_ids:
+        return {}
+
+    # Build the SQLAlchemy select statement.
+    stmt = (
+        select(MovieTagCount)
+        .where(MovieTagCount.movie_id.in_(movie_ids))
+        .order_by(MovieTagCount.movie_id, MovieTagCount.count.desc(), MovieTagCount.tag)
+    )
+
+    # Execute the select statement and return a list of MovieTagCount objects.
+    rows = session.scalars(stmt).all()
+
+    # Build the mapping of movie_id to ordered tag strings.
+    tags_by_movie: dict[int, list[str]] = {movie_id: [] for movie_id in movie_ids}
+
+    # Iterate over the rows and add the tags to the mapping.
+    for row in rows:
+        tags = tags_by_movie[row.movie_id]
+        if len(tags) < limit_per_movie:
+            tags.append(row.tag)
+    return tags_by_movie

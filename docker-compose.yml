@@ -2,6 +2,15 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: cinerankml-postgres
+    shm_size: 2gb
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - maintenance_work_mem=512MB
     env_file:
       - .env
     environment:
@@ -43,6 +52,7 @@ services:
       - stream
       - ratings
       - tags
+      - api
     ports:
       - "${KAFKA_PORT:-9092}:9092"
     environment:
@@ -60,6 +70,8 @@ services:
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafkadata:/var/lib/kafka/data
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 10s
@@ -89,6 +101,8 @@ services:
       ROW_LIMIT: ${ROW_LIMIT:-}
       METRICS_PORT: 9101
       WORKER_NAME: ratings-producer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     volumes:
       - ./datasets/ml-25m:/data:ro
     depends_on:
@@ -118,6 +132,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       METRICS_PORT: 9102
       WORKER_NAME: ratings-consumer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     depends_on:
       kafka:
         condition: service_healthy
@@ -148,6 +164,8 @@ services:
       ROW_LIMIT: ${ROW_LIMIT:-}
       METRICS_PORT: 9103
       WORKER_NAME: tags-producer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     volumes:
       - ./datasets/ml-25m:/data:ro
     depends_on:
@@ -177,9 +195,556 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       METRICS_PORT: 9104
       WORKER_NAME: tags-consumer
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PROGRESS_LOG_EVERY_N: ${PROGRESS_LOG_EVERY_N:-10000}
     depends_on:
       kafka:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - cinerankml
+
+  seed-catalog:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: seed-catalog
+    container_name: cinerankml-seed-catalog
+    profiles:
+      - catalog
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      MOVIES_CSV_PATH: /data/movies.csv
+      LINKS_CSV_PATH: /data/links.csv
+      SEED_BATCH_SIZE: ${SEED_BATCH_SIZE:-1000}
+    volumes:
+      - ./datasets/ml-25m:/data:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
+  tmdb-enrichment:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: tmdb-enrichment
+    container_name: cinerankml-tmdb-enrichment
+    profiles:
+      - catalog
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      TMDB_REQUESTS_PER_SECOND: ${TMDB_REQUESTS_PER_SECOND:-3}
+      ENRICHMENT_BATCH_SIZE: ${ENRICHMENT_BATCH_SIZE:-50}
+      ENRICHMENT_LIMIT: ${ENRICHMENT_LIMIT:-}
+      ENRICHMENT_LOG_EVERY_N: ${ENRICHMENT_LOG_EVERY_N:-100}
+      ENRICH_ALL: ${ENRICH_ALL:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
+  opensearch:
+    image: opensearchproject/opensearch:2.18.0
+    container_name: cinerankml-opensearch
+    profiles:
+      - search
+      - api
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cinerankml
+
+  opensearch-exporter:
+    image: quay.io/prometheuscommunity/elasticsearch-exporter:latest
+    container_name: cinerankml-opensearch-exporter
+    profiles:
+      - search
+    command:
+      - "--es.uri=http://opensearch:9200"
+      - "--es.indices"
+    ports:
+      - "9114:9114"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks:
+      - cinerankml
+
+  embedder-api:
+    build:
+      context: .
+      dockerfile: infra/docker/services/Dockerfile
+      args:
+        PACKAGE: embedder-api
+    container_name: cinerankml-embedder-api
+    profiles:
+      - search
+    env_file:
+      - .env
+    environment:
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDER_HOST: 0.0.0.0
+      EMBEDDER_PORT: 8080
+      METRICS_PORT: 9110
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - cinerankml
+
+  opensearch-sync:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: opensearch-sync
+    container_name: cinerankml-opensearch-sync
+    profiles:
+      - search
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_INDEX_ALIAS: ${OPENSEARCH_INDEX_ALIAS:-movies}
+      OPENSEARCH_BULK_BATCH_SIZE: ${OPENSEARCH_BULK_BATCH_SIZE:-100}
+      EMBEDDER_BASE_URL: http://embedder-api:8080
+      EMBEDDING_VERSION: ${EMBEDDING_VERSION:-content-v1}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      EMBEDDING_TEXT_TEMPLATE_VERSION: ${EMBEDDING_TEXT_TEMPLATE_VERSION:-v1}
+      SYNC_BATCH_SIZE: ${SYNC_BATCH_SIZE:-50}
+      SYNC_LIMIT: ${SYNC_LIMIT:-}
+      SYNC_LOG_EVERY_N: ${SYNC_LOG_EVERY_N:-100}
+      REBUILD_INDEX: ${REBUILD_INDEX:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      opensearch:
+        condition: service_healthy
+      embedder-api:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - cinerankml
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: cinerankml-minio
+    profiles:
+      - snapshots
+      - ml
+      - api
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - cinerankml
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: cinerankml-minio-init
+    profiles:
+      - snapshots
+      - ml
+      - api
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${S3_BUCKET}
+      "
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - cinerankml
+
+  pushgateway:
+    image: quay.io/prometheus/pushgateway:latest
+    container_name: cinerankml-pushgateway
+    ports:
+      - "9091:9091"
+    networks:
+      - cinerankml
+
+  snapshot-to-s3:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: snapshot-to-s3
+    container_name: cinerankml-snapshot-to-s3
+    profiles:
+      - snapshots
+      - ml
+      - api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      SNAPSHOT_BATCH_SIZE: ${SNAPSHOT_BATCH_SIZE:-50000}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      METRICS_JOB_NAME: ${METRICS_JOB_NAME:-s3_snapshot}
+      SNAPSHOT_ID: ${SNAPSHOT_ID:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+    restart: "no"
+    networks:
+      - cinerankml
+
+  prepare-cf-dataset:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: prepare-cf-dataset
+    container_name: cinerankml-prepare-cf-dataset
+    profiles:
+      - ml
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      METRICS_JOB_NAME: ${CF_DATASET_METRICS_JOB_NAME:-prepare_cf_dataset}
+      SNAPSHOT_ID: ${SNAPSHOT_ID:-}
+      CF_DATASET_VERSION: ${CF_DATASET_VERSION:-}
+      CF_SHUFFLE_SEED: ${CF_SHUFFLE_SEED:-42}
+      CF_TRAIN_FRACTION: ${CF_TRAIN_FRACTION:-0.8}
+      CF_VALIDATION_FRACTION: ${CF_VALIDATION_FRACTION:-0.1}
+      CF_TEST_FRACTION: ${CF_TEST_FRACTION:-0.1}
+      CF_PART_ROW_LIMIT: ${CF_PART_ROW_LIMIT:-500000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+    restart: "no"
+    networks:
+      - cinerankml
+
+  train-cf:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: train-cf
+    container_name: cinerankml-train-cf
+    profiles:
+      - ml
+    gpus: all
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-collaborative_filtering}
+      CF_DATASET_VERSION: ${CF_DATASET_VERSION:-}
+      CF_VERSION: ${CF_VERSION:-}
+      CF_EMBEDDING_DIM: ${CF_EMBEDDING_DIM:-64}
+      CF_EPOCHS: ${CF_EPOCHS:-20}
+      CF_BATCH_SIZE: ${CF_BATCH_SIZE:-4096}
+      CF_LEARNING_RATE: ${CF_LEARNING_RATE:-0.01}
+      CF_EARLY_STOPPING_PATIENCE: ${CF_EARLY_STOPPING_PATIENCE:-3}
+      CF_SHUFFLE_SEED: ${CF_SHUFFLE_SEED:-42}
+      CF_DEVICE: ${CF_DEVICE:-auto}
+      CF_METRICS_JOB_NAME: ${CF_METRICS_JOB_NAME:-train_cf}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+      mlflow:
+        condition: service_started
+      prepare-cf-dataset:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
+  create-features:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: create-features
+    container_name: cinerankml-create-features
+    profiles:
+      - ml
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      SNAPSHOT_ID: ${SNAPSHOT_ID:-}
+      CF_DATASET_VERSION: ${CF_DATASET_VERSION:-}
+      CF_VERSION: ${CF_VERSION:-}
+      DATASET_VERSION: ${DATASET_VERSION:-}
+      FEATURE_SCHEMA_VERSION: ${FEATURE_SCHEMA_VERSION:-hybrid-v1}
+      CONTENT_EMBEDDING_VERSION: ${CONTENT_EMBEDDING_VERSION:-content-v1}
+      HYBRID_PART_ROW_LIMIT: ${HYBRID_PART_ROW_LIMIT:-100000}
+      HYBRID_PROGRESS_LOG_EVERY_N: ${HYBRID_PROGRESS_LOG_EVERY_N:-5000}
+      HYBRID_RATING_FETCH_BATCH_SIZE: ${HYBRID_RATING_FETCH_BATCH_SIZE:-5000}
+      HYBRID_USER_BATCH_SIZE: ${HYBRID_USER_BATCH_SIZE:-2000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HYBRID_METRICS_JOB_NAME: ${HYBRID_METRICS_JOB_NAME:-create_features}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+    restart: "no"
+    networks:
+      - cinerankml
+
+  train-hybrid-ranker:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: train-hybrid-ranker
+    container_name: cinerankml-train-hybrid-ranker
+    profiles:
+      - ml
+    gpus: all
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME_HYBRID:-hybrid_ranker}
+      DATASET_VERSION: ${DATASET_VERSION:-}
+      MODEL_VERSION: ${MODEL_VERSION:-}
+      HYBRID_EPOCHS: ${HYBRID_EPOCHS:-20}
+      HYBRID_BATCH_SIZE: ${HYBRID_BATCH_SIZE:-4096}
+      HYBRID_LEARNING_RATE: ${HYBRID_LEARNING_RATE:-0.001}
+      HYBRID_DROPOUT: ${HYBRID_DROPOUT:-0.1}
+      HYBRID_EARLY_STOPPING_PATIENCE: ${HYBRID_EARLY_STOPPING_PATIENCE:-3}
+      HYBRID_SHUFFLE_SEED: ${HYBRID_SHUFFLE_SEED:-42}
+      HYBRID_DEVICE: ${HYBRID_DEVICE:-auto}
+      HYBRID_METRICS_JOB_NAME: ${HYBRID_METRICS_JOB_NAME:-train_hybrid_ranker}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+      mlflow:
+        condition: service_started
+    restart: "no"
+    networks:
+      - cinerankml
+
+  evaluate-model:
+    build:
+      context: .
+      dockerfile: infra/docker/jobs/Dockerfile
+      args:
+        PACKAGE: evaluate-model
+    container_name: cinerankml-evaluate-model
+    profiles:
+      - ml
+    gpus: all
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME_HYBRID:-hybrid_ranker}
+      MLFLOW_REGISTERED_MODEL_NAME: ${MLFLOW_REGISTERED_MODEL_NAME:-hybrid_ranker}
+      MODEL_VERSION: ${MODEL_VERSION:-}
+      DATASET_VERSION: ${DATASET_VERSION:-}
+      HYBRID_BATCH_SIZE: ${HYBRID_BATCH_SIZE:-4096}
+      HYBRID_DEVICE: ${HYBRID_DEVICE:-auto}
+      EVAL_METRICS_JOB_NAME: ${EVAL_METRICS_JOB_NAME:-evaluate_model}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      pushgateway:
+        condition: service_started
+      mlflow:
+        condition: service_started
+      train-hybrid-ranker:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - cinerankml
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.14.0
+    container_name: cinerankml-mlflow
+    profiles:
+      - ml
+    command:
+      - /bin/bash
+      - -c
+      - |
+        pip install --quiet psycopg2-binary &&
+        python - <<PY
+        import os
+        import psycopg2
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+        conn = psycopg2.connect(
+            host="postgres",
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            dbname="postgres",
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = 'mlflow'")
+        if cur.fetchone() is None:
+            cur.execute("CREATE DATABASE mlflow")
+        cur.close()
+        conn.close()
+        PY
+        exec mlflow server \
+          --host 0.0.0.0 \
+          --port 5000 \
+          --allowed-hosts "$${MLFLOW_SERVER_ALLOWED_HOSTS}" \
+          --backend-store-uri postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@postgres:5432/mlflow \
+          --default-artifact-root /mlflow/artifacts
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cinerankml}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cinerankml}
+      POSTGRES_DB: ${POSTGRES_DB:-cinerankml}
+      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow:*,localhost:*"
+    volumes:
+      - mlflowdata:/mlflow/artifacts
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    depends_on:
       postgres:
         condition: service_healthy
       migrate:
@@ -218,6 +783,97 @@ services:
         condition: service_completed_successfully
       postgres-exporter:
         condition: service_started
+      pushgateway:
+        condition: service_started
+    networks:
+      - cinerankml
+
+  recommender-api:
+    build:
+      context: .
+      dockerfile: infra/docker/apps/Dockerfile
+      args:
+        PACKAGE: recommender-api
+    container_name: cinerankml-recommender-api
+    profiles:
+      - api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cinerankml}:${POSTGRES_PASSWORD:-cinerankml}@postgres:5432/${POSTGRES_DB:-cinerankml}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENSEARCH_HOST: opensearch
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_INDEX_ALIAS: ${OPENSEARCH_INDEX_ALIAS:-movies}
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-cinerankml}
+      RECOMMENDER_HOST: 0.0.0.0
+      RECOMMENDER_PORT: 8090
+      METRICS_PORT: 9111
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-session_id}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-7}
+      CANDIDATE_POOL_SIZE: ${CANDIDATE_POOL_SIZE:-200}
+      DEFAULT_TOP_K: ${DEFAULT_TOP_K:-20}
+      MIN_RATINGS_FOR_RECOMMEND: ${MIN_RATINGS_FOR_RECOMMEND:-5}
+      MODEL_VERSION: ${MODEL_VERSION:-}
+      CF_VERSION: ${CF_VERSION:-}
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_REGISTERED_MODEL_NAME: ${MLFLOW_REGISTERED_MODEL_NAME:-hybrid_ranker}
+      EXPERIMENT_ID: ${EXPERIMENT_ID:-exp-main-vs-candidate}
+      INITIAL_MAIN_SPLIT: ${INITIAL_MAIN_SPLIT:-0.70}
+      INITIAL_CANDIDATE_SPLIT: ${INITIAL_CANDIDATE_SPLIT:-0.30}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8090:8090"
+      - "9111:9111"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    networks:
+      - cinerankml
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/docker/frontend/Dockerfile.dev
+    container_name: cinerankml-frontend
+    profiles:
+      - api
+    environment:
+      VITE_RECOMMENDER_API_URL: ${VITE_RECOMMENDER_API_URL:-http://localhost:8090}
+      FRONTEND_PORT: ${FRONTEND_PORT:-5173}
+    volumes:
+      - ./apps/frontend/src:/app/src
+      - ./apps/frontend/index.html:/app/index.html
+      - ./apps/frontend/public:/app/public
+      - ./apps/frontend/vite.config.ts:/app/vite.config.ts
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      recommender-api:
+        condition: service_healthy
     networks:
       - cinerankml
 
@@ -243,6 +899,10 @@ services:
 
 volumes:
   pgdata:
+  kafkadata:
+  osdata:
+  miniodata:
+  mlflowdata:
 
 networks:
   cinerankml:
