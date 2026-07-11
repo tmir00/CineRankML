@@ -28,6 +28,9 @@ class UserRatingDisplayRow:
     year: int | None
     genres: list[str]
     poster_path: str | None
+    poster_safe: bool
+    show_poster: bool
+    certification_us: str | None
     rating: float
     rated_at: datetime
 
@@ -179,6 +182,9 @@ def fetch_user_ratings_with_catalog(session: Session, user_id: int) -> list[User
                 year=catalog.year,
                 genres=catalog.genres,
                 poster_path=catalog.poster_path,
+                poster_safe=catalog.poster_safe,
+                show_poster=catalog.show_poster,
+                certification_us=catalog.certification_us,
                 rating=row.rating,
                 rated_at=row.rating_timestamp,
             )

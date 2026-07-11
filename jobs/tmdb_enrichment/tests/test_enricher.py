@@ -28,6 +28,8 @@ def _details() -> TmdbMovieDetails:
         tmdb_vote_count=100,
         tmdb_keywords=["sci-fi"],
         poster_path="/poster.jpg",
+        adult=False,
+        certification_us="PG-13",
     )
 
 

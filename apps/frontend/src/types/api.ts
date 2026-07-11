@@ -26,6 +26,9 @@ export interface MovieSearchResult {
   year: number | null
   genres: string[]
   poster_path?: string | null
+  poster_safe?: boolean
+  show_poster?: boolean
+  certification_us?: string | null
 }
 
 export interface MovieSearchResponse {
@@ -38,6 +41,9 @@ export interface Recommendation {
   year: number | null
   genres: string[]
   poster_path?: string | null
+  poster_safe?: boolean
+  show_poster?: boolean
+  certification_us?: string | null
   predicted_score: number
   rank_position: number
   model_role: string
@@ -74,6 +80,9 @@ export interface UserRatingItem {
   year: number | null
   genres: string[]
   poster_path?: string | null
+  poster_safe?: boolean
+  show_poster?: boolean
+  certification_us?: string | null
   rating: number
   rated_at: string
 }

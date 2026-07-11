@@ -70,7 +70,12 @@ export function MovieCard({
       }`}
     >
       <div className="relative aspect-[2/3] shrink-0 overflow-hidden">
-        <PosterImage title={movie.title} posterPath={movie.poster_path} />
+        <PosterImage
+          title={movie.title}
+          year={movie.year}
+          posterPath={movie.poster_path}
+          showPoster={movie.show_poster !== false && movie.poster_safe !== false}
+        />
         {mode === 'search' && saved ? (
           <span className="absolute right-2 top-2 rounded-full bg-emerald-500/90 px-2 py-1 text-xs font-medium text-white">
             Saved

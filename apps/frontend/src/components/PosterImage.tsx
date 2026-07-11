@@ -3,11 +3,19 @@ import { posterUrl } from '../utils/poster'
 interface PosterImageProps {
   title: string
   posterPath?: string | null
+  showPoster?: boolean
+  year?: number | null
   className?: string
 }
 
-export function PosterImage({ title, posterPath, className = '' }: PosterImageProps) {
-  const url = posterUrl(posterPath)
+export function PosterImage({
+  title,
+  posterPath,
+  showPoster = true,
+  year,
+  className = '',
+}: PosterImageProps) {
+  const url = showPoster ? posterUrl(posterPath) : null
 
   if (url) {
     return (
@@ -22,10 +30,15 @@ export function PosterImage({ title, posterPath, className = '' }: PosterImagePr
 
   return (
     <div
-      className={`flex h-full w-full flex-col items-center justify-center bg-gradient-to-br from-slate-800 via-purple-950 to-slate-900 ${className}`}
+      className={`flex h-full w-full flex-col justify-end bg-gradient-to-br from-slate-900 via-slate-800 to-purple-950 p-4 ${className}`}
     >
-      <span className="text-4xl opacity-60">🎬</span>
-      <span className="mt-2 px-3 text-center text-xs text-slate-400">No poster</span>
+      <div className="rounded-2xl border border-white/10 bg-black/20 p-3 backdrop-blur-sm">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
+          {showPoster ? 'Poster unavailable' : 'Poster hidden'}
+        </p>
+        <h3 className="mt-2 line-clamp-3 text-sm font-semibold text-white">{title}</h3>
+        <p className="mt-1 text-xs text-slate-300">{year ?? 'Unknown year'}</p>
+      </div>
     </div>
   )
 }

@@ -71,6 +71,9 @@ def _score_candidates(
                 year=candidate.year,
                 genres=candidate.genres,
                 poster_path=candidate.poster_path or None,
+                poster_safe=candidate.poster_safe,
+                show_poster=candidate.show_poster,
+                certification_us=candidate.certification_us,
                 retrieval_source=candidate.retrieval_source,
             )
         )
@@ -244,6 +247,9 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
                 year=row.year,
                 genres=row.genres,
                 poster_path=row.poster_path,
+                poster_safe=row.poster_safe,
+                show_poster=row.show_poster,
+                certification_us=row.certification_us,
                 predicted_score=row.predicted_score,
                 rank_position=rank_position,
                 model_role=row.model_role,

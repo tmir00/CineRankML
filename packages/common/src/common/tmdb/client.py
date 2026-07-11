@@ -8,6 +8,7 @@ import logging
 
 from dataclasses import dataclass
 from common.config.settings import TmdbSettings
+from common.tmdb.certifications import parse_us_certification_from_movie_payload
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,8 @@ class TmdbMovieDetails:
     tmdb_vote_count: int | None
     tmdb_keywords: list[str]
     poster_path: str | None
+    adult: bool
+    certification_us: str | None
 
 
 class TmdbClient:
@@ -74,7 +77,7 @@ class TmdbClient:
 
         # Build the URL, parameters, and headers for the TMDB movie details request.
         url = f"{self._settings.tmdb_base_url.rstrip('/')}/3/movie/{tmdb_id}"
-        params = {"append_to_response": "keywords", "language": "en-US"}
+        params = {"append_to_response": "keywords,release_dates", "language": "en-US"}
         headers = {"Authorization": f"Bearer {self._settings.tmdb_api_key}"}
 
         # Retry the request up to the maximum number of retries
@@ -190,4 +193,9 @@ class TmdbClient:
             tmdb_vote_count=int(vote_count) if vote_count is not None else None,
             tmdb_keywords=keywords,
             poster_path=payload.get("poster_path") or None,
+            adult=bool(payload.get("adult", False)),
+            certification_us=parse_us_certification_from_movie_payload(
+                payload,
+                tmdb_id=payload.get("id"),
+            ),
         )

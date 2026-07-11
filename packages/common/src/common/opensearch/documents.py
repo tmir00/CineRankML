@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from common.poster_safety.show_poster import compute_show_poster
+
 
 class MovieLike(Protocol):
     """Minimal movie fields needed to build an OpenSearch document."""
@@ -23,6 +25,10 @@ class MovieLike(Protocol):
     tmdb_id: int | None
     imdb_id: str | None
     poster_path: str | None
+    adult: bool
+    certification_us: str | None
+    poster_safe: bool
+    poster_checked: bool
 
 
 def build_movie_document(movie: MovieLike, tags: list[str], embedding: list[float], \
@@ -61,6 +67,16 @@ def build_movie_document(movie: MovieLike, tags: list[str], embedding: list[floa
         "tmdb_id": movie.tmdb_id,
         "imdb_id": movie.imdb_id,
         "poster_path": movie.poster_path,
+        "adult": movie.adult,
+        "certification_us": movie.certification_us,
+        "poster_safe": movie.poster_safe,
+        "show_poster": compute_show_poster(
+            poster_path=movie.poster_path,
+            poster_safe=movie.poster_safe,
+            poster_checked=movie.poster_checked,
+            adult=movie.adult,
+            certification_us=movie.certification_us,
+        ),
         "embedding_version": embedding_version,
         "content_embedding": embedding,
     }

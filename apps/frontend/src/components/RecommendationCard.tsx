@@ -48,7 +48,12 @@ export function RecommendationCard({ movie, recommendMeta, onRated }: Recommenda
   return (
     <article className="group relative overflow-hidden rounded-2xl border border-white/10 bg-slate-900/90 transition hover:-translate-y-1 hover:border-purple-400/40 hover:shadow-2xl hover:shadow-purple-950/30">
       <div className="relative aspect-[2/3] overflow-hidden">
-        <PosterImage title={movie.title} posterPath={movie.poster_path} />
+        <PosterImage
+          title={movie.title}
+          year={movie.year}
+          posterPath={movie.poster_path}
+          showPoster={movie.show_poster !== false && movie.poster_safe !== false}
+        />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent" />
         <span className="absolute left-3 top-3 rounded-full bg-black/70 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur">
           #{movie.rank_position}

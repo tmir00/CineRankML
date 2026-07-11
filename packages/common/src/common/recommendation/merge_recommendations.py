@@ -18,6 +18,9 @@ class RankedCandidate:
     year: int | None
     genres: list[str]
     poster_path: str | None
+    poster_safe: bool
+    show_poster: bool
+    certification_us: str | None
     retrieval_source: str
 
 

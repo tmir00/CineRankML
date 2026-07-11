@@ -30,7 +30,15 @@ class CandidateMovieDoc:
     tmdb_vote_count: int | None
     content_embedding: list[float]
     poster_path: str | None = None
+    poster_safe: bool = True
+    show_poster: bool = True
+    certification_us: str | None = None
     retrieval_source: str = RETRIEVAL_SOURCE_KNN
+
+
+def _poster_safe_filter() -> dict:
+    """OpenSearch filter clause that keeps only movies with safe posters."""
+    return {"term": {"poster_safe": True}}
 
 
 def _parse_candidate_hit(
@@ -45,7 +53,7 @@ def _parse_candidate_hit(
 
     Do this by:
     1. Reading movie_id and content_embedding from _source.
-    2. Skipping hits the user already rated or that lack required fields.
+    2. Skipping hits the user already rated, unsafe posters, or that lack required fields.
     3. Building a CandidateMovieDoc with the requested retrieval_source tag.
 
     ============================ Arguments ============================
@@ -60,6 +68,11 @@ def _parse_candidate_hit(
     source = hit.get("_source", {})
     movie_id = source.get("movie_id")
     if movie_id is None:
+        return None
+
+    # Defensive post-filter: OpenSearch queries already require poster_safe=true,
+    # but drop any unsafe hit that still slips through.
+    if source.get("poster_safe") is False:
         return None
 
     movie_id_int = int(movie_id)
@@ -84,6 +97,9 @@ def _parse_candidate_hit(
         tmdb_vote_count=source.get("tmdb_vote_count"),
         content_embedding=list(embedding),
         poster_path=source.get("poster_path"),
+        poster_safe=bool(source.get("poster_safe", True)),
+        show_poster=bool(source.get("show_poster", True)),
+        certification_us=source.get("certification_us"),
         retrieval_source=retrieval_source,
     )
 
@@ -95,6 +111,9 @@ def _build_knn_query_body(
 ) -> dict:
     """
     Build an OpenSearch query body for kNN retrieval on content_embedding.
+
+    Always wraps the knn clause in a bool query so poster_safe=true is applied
+    even when there are no rated-movie excludes.
 
     ============================ Arguments ============================
     query_vector: User content profile vector with shape (384,).
@@ -113,18 +132,17 @@ def _build_knn_query_body(
         }
     }
 
+    bool_query: dict = {
+        "must": [knn_clause],
+        "filter": [_poster_safe_filter()],
+    }
     if exclude_movie_ids:
-        return {
-            "size": k,
-            "query": {
-                "bool": {
-                    "must": [knn_clause],
-                    "must_not": [{"terms": {"movie_id": sorted(exclude_movie_ids)}}],
-                }
-            },
-        }
+        bool_query["must_not"] = [{"terms": {"movie_id": sorted(exclude_movie_ids)}}]
 
-    return {"size": k, "query": knn_clause}
+    return {
+        "size": k,
+        "query": {"bool": bool_query},
+    }
 
 
 def _build_genre_quality_filters(
@@ -132,11 +150,12 @@ def _build_genre_quality_filters(
     min_vote_count: int,
     min_vote_average: float,
 ) -> list[dict]:
-    """Build shared genre and quality filter clauses for bucket B and C queries."""
+    """Build shared genre, quality, and poster-safety filter clauses for bucket B and C queries."""
     return [
         {"terms": {"genres": genres}},
         {"range": {"tmdb_vote_count": {"gte": min_vote_count}}},
         {"range": {"tmdb_vote_average": {"gte": min_vote_average}}},
+        _poster_safe_filter(),
     ]
 
 
@@ -154,7 +173,8 @@ def build_popular_by_genres_query_body(
     Do this by:
     1. Filtering to movies that match at least one liked genre.
     2. Applying minimum vote count and average quality floors.
-    3. Sorting by tmdb_popularity descending.
+    3. Excluding movies with poster_safe=false.
+    4. Sorting by tmdb_popularity descending.
 
     ============================ Arguments ============================
     genres: Liked genre names from the user's rating history.
@@ -193,7 +213,8 @@ def build_random_by_genres_query_body(
 
     Do this by:
     1. Filtering to movies that match at least one liked genre with quality floors.
-    2. Replacing the relevance score with random_score so results shuffle within the filter.
+    2. Excluding movies with poster_safe=false.
+    3. Replacing the relevance score with random_score so results shuffle within the filter.
 
     ============================ Arguments ============================
     genres: Liked genre names from the user's rating history.
@@ -222,6 +243,36 @@ def build_random_by_genres_query_body(
                     "field": "movie_id",
                 },
                 "boost_mode": "replace",
+            }
+        },
+    }
+
+
+def build_title_search_query_body(query: str, limit: int = 20) -> dict:
+    """
+    Build a title multi_match query that excludes unsafe posters.
+
+    ============================ Arguments ============================
+    query: Free-text title search string (already trimmed by the caller).
+    limit: Maximum number of movies to return.
+
+    ============================ Returns ============================
+    Query body dict for OpenSearch search.
+    """
+    return {
+        "size": limit,
+        "query": {
+            "bool": {
+                "must": [
+                    {
+                        "multi_match": {
+                            "query": query,
+                            "fields": ["title", "title.keyword"],
+                            "type": "best_fields",
+                        }
+                    }
+                ],
+                "filter": [_poster_safe_filter()],
             }
         },
     }
@@ -470,7 +521,8 @@ def search_movies_by_title(client: OpenSearch, index_alias: str, query: str, \
 
     Do this by:
     1. Running a multi_match query on title fields.
-    2. Returning basic metadata without requiring a content embedding.
+    2. Excluding movies with poster_safe=false.
+    3. Returning basic metadata without requiring a content embedding.
 
     ============================ Arguments ============================
     client: The OpenSearch client.
@@ -486,17 +538,8 @@ def search_movies_by_title(client: OpenSearch, index_alias: str, query: str, \
     if not trimmed:
         return []
 
-    # Build the query body.
-    body = {
-        "size": limit,
-        "query": {
-            "multi_match": {
-                "query": trimmed,
-                "fields": ["title", "title.keyword"],
-                "type": "best_fields",
-            }
-        },
-    }
+    # Build the query body with poster_safe=true filter.
+    body = build_title_search_query_body(trimmed, limit=limit)
 
     # Execute the query and get the hits.
     response = client.search(index=index_alias, body=body)
