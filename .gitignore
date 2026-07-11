@@ -223,3 +223,7 @@ __marimo__/
 
 # Datasets
 datasets/
+
+# Local Postgres dumps (do not commit)
+*.dump
+cinerankml.dump

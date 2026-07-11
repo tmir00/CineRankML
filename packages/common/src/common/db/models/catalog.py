@@ -31,9 +31,6 @@ class CatalogMovie(Base):
     poster_checked: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     # When false, the frontend hides the poster image (precomputed offline, not request-time).
     poster_safe: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    poster_safety_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
-    poster_safety_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    poster_safety_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     poster_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enrichment_status: Mapped[str | None] = mapped_column(Text, nullable=True)
     enrichment_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

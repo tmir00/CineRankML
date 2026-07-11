@@ -106,13 +106,17 @@ def resolve_model_version_by_alias(*, tracking_uri: str, registered_model_name: 
     ============================ Returns ============================
     The MinIO model_version string, or None when the alias is not set.
     """
+    # Skip remote lookups that cannot succeed (empty URI or disabled stub).
+    if not tracking_uri or "mlflow-disabled" in tracking_uri:
+        return None
+
     client = _get_client(tracking_uri)
     
     # Find the MLFlow version tied to 'main' or 'candidate'.
     try:
         # For this registered MLflow model, what MinIO model_version does alias X currently point to?
         model_version_info = client.get_model_version_by_alias(registered_model_name, alias)
-    except MlflowException:
+    except Exception: 
         return None
 
     # Get the tags associated with this MLFlow version.
@@ -124,7 +128,10 @@ def resolve_model_version_by_alias(*, tracking_uri: str, registered_model_name: 
     # If no model_version tag is found, look up the run_id and get the model_version tag from the run.
     run_id = model_version_info.run_id
     if run_id:
-        run = client.get_run(run_id)
+        try:
+            run = client.get_run(run_id)
+        except Exception:  # noqa: BLE001
+            return None
         run_tag = run.data.tags.get("model_version")
         if run_tag:
             return run_tag

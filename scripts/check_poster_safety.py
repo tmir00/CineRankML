@@ -181,9 +181,6 @@ def main() -> None:
                         movie_id=candidate.movie_id,
                         poster_checked=True,
                         poster_safe=False,
-                        poster_safety_provider="adult_flag",
-                        poster_safety_score=1.0,
-                        poster_safety_reason="adult=true",
                         poster_checked_at=checked_at,
                     )
                 )
@@ -228,9 +225,6 @@ def main() -> None:
                         movie_id=candidate.movie_id,
                         poster_checked=True,
                         poster_safe=result.poster_safe,
-                        poster_safety_provider="openai_omni_moderation",
-                        poster_safety_score=result.score,
-                        poster_safety_reason=result.reason,
                         poster_checked_at=checked_at,
                     )
                 )

@@ -658,9 +658,6 @@ class PosterSafetyUpdate:
     movie_id: int
     poster_checked: bool
     poster_safe: bool
-    poster_safety_provider: str | None
-    poster_safety_score: float | None
-    poster_safety_reason: str | None
     poster_checked_at: datetime
 
 
@@ -791,9 +788,6 @@ def update_poster_safety_batch(session: Session, updates: list[PosterSafetyUpdat
             .values(
                 poster_checked=update.poster_checked,
                 poster_safe=update.poster_safe,
-                poster_safety_provider=update.poster_safety_provider,
-                poster_safety_score=update.poster_safety_score,
-                poster_safety_reason=update.poster_safety_reason,
                 poster_checked_at=update.poster_checked_at,
                 updated_at=now,
             )
