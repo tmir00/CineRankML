@@ -60,20 +60,20 @@ def load_runtime(settings: RecommenderApiSettings) -> InferenceRuntime:
     candidate_version = resolve_candidate_model_version(settings, main_version)
 
     main_bundle = load_hybrid_model_bundle(
-        s3_client,
-        settings,
-        main_version,
-        device,
+        s3_client=s3_client,
+        settings=settings,
+        model_version=main_version,
+        device=device,
         cf_version_override=settings.cf_version,
     )
 
     candidate_bundle = None
     if candidate_version is not None:
         candidate_bundle = load_hybrid_model_bundle(
-            s3_client,
-            settings,
-            candidate_version,
-            device,
+            s3_client=s3_client,
+            settings=settings,
+            model_version=candidate_version,
+            device=device,
         )
 
     session_factory = get_session_factory()
