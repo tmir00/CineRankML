@@ -178,7 +178,7 @@ def bootstrap_experiment_state(
     session = session_factory()
     try:
         state = get_or_create_active_experiment(
-            session,
+            session=session,
             experiment_id=settings.experiment_id,
             main_model_version=main_version,
             candidate_model_version=candidate_version,

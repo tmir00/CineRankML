@@ -101,7 +101,7 @@ def handle_recommendation_rating_feedback(*, runtime: InferenceRuntime, session:
     # Also update the in-memory runtime so future requests use the latest split immediately.
     if result.changed:
         updated = update_split_fractions(
-            session,
+            session=session,
             experiment_id=experiment_id,
             main_split_fraction=result.fractions.main,
             candidate_split_fraction=result.fractions.candidate,
@@ -124,7 +124,7 @@ def handle_recommendation_rating_feedback(*, runtime: InferenceRuntime, session:
         # If MLflow promotion succeeded, update local experiment state too.
         if promoted_version:
             updated = record_promotion(
-                session,
+                session=session,
                 experiment_id=experiment_id,
                 new_main_version=promoted_version,
             )
