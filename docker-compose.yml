@@ -851,6 +851,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+    volumes:
+      - ./packages/common/src/common:/app/packages/common/src/common
     networks:
       - cinerankml
 

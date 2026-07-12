@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from common.tmdb.client import TmdbMovieDetails
 from common.poster_safety.show_poster import compute_show_poster
 from sqlalchemy.dialects.postgresql import insert
@@ -441,8 +441,9 @@ def mark_all_catalog_movies_dirty(session: Session) -> int:
     Mark every catalog movie dirty for a full OpenSearch rebuild.
 
     Do this by:
-    1. Selecting all catalog movie ids.
-    2. Upserting catalog_dirty_movies rows for each id.
+    1. Counting catalog movies (return early when the catalog is empty).
+    2. Upserting dirty rows with INSERT…SELECT so Postgres stays under the
+       bind-parameter limit (a per-id VALUES list blows past 65535 for large catalogs).
 
     ============================ Arguments ============================
     session: An open SQLAlchemy session inside a transaction.
@@ -450,42 +451,32 @@ def mark_all_catalog_movies_dirty(session: Session) -> int:
     ============================ Returns ============================
     The number of movies marked dirty.
     """
-    # Get the current time.
-    now = datetime.now(tz=UTC)
-
-    # Get all the movie ids.
-    movie_ids = list(session.scalars(select(CatalogMovie.movie_id)).all())
-    if not movie_ids:
+    # Count catalog movies first so we can return without a no-op upsert.
+    count = session.scalar(select(func.count()).select_from(CatalogMovie)) or 0
+    if count == 0:
         return 0
 
-    # Build the list of dictionaries for the bulk insert.
-    values = [
-        {
-            "movie_id": movie_id,
-            "first_dirty_at": now,
-            "last_dirty_at": now,
-            "attempt_count": 0,
-            "last_error": None,
-        }
-        for movie_id in movie_ids
-    ]
+    # Get the current time for first/last dirty timestamps.
+    now = datetime.now(tz=UTC)
 
-    # Build the SQLAlchemy insert statement for the bulk insert into catalog_dirty_movies.
-    stmt = insert(CatalogDirtyMovie).values(values)
-
-    # Build the SQLAlchemy on conflict do update statement for movies that already exist in the table.
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["movie_id"],
-        set_={
-            "last_dirty_at": now,
-            "attempt_count": 0,
-            "last_error": None,
-        },
+    # One statement copies every movie_id into catalog_dirty_movies (or refreshes existing rows).
+    session.execute(
+        text(
+            """
+            INSERT INTO catalog_dirty_movies
+                (movie_id, first_dirty_at, last_dirty_at, attempt_count, last_error)
+            SELECT movie_id, :now, :now, 0, NULL
+            FROM catalog_movies
+            ON CONFLICT (movie_id) DO UPDATE SET
+                last_dirty_at = EXCLUDED.last_dirty_at,
+                attempt_count = 0,
+                last_error = NULL
+            """
+        ),
+        {"now": now},
     )
-    
-    session.execute(stmt)
-    # Return the number of movies marked dirty.
-    return len(movie_ids)
+    # Return how many catalog movies were marked dirty.
+    return count
 
 
 def count_dirty_movies(session: Session) -> int:

@@ -44,7 +44,8 @@ jobs:
             build_args: PACKAGE=recommender-api
           - image: cinerankml-frontend
             dockerfile: infra/docker/frontend/Dockerfile
-            build_args: VITE_RECOMMENDER_API_URL=https://cinerankml.taahaamir.com/api
+            # Same-origin /api matches HTTP Traefik ingress (avoids HTTPS/cert mismatch).
+            build_args: VITE_RECOMMENDER_API_URL=/api
 
     steps:
       - name: Checkout
