@@ -2,6 +2,16 @@ import { useCallback, useState } from 'react'
 import { getRecommendations } from '../api/recommendations'
 import type { RecommendResponse } from '../types/api'
 
+/** Client nonce for reshuffling retrieval; works on plain HTTP (no randomUUID). */
+function newRefreshToken(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  const bytes = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export function useRecommendations() {
   const [data, setData] = useState<RecommendResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -16,7 +26,7 @@ export function useRecommendations() {
       const response = await getRecommendations({
         ratings: [],
         top_k: requestedTopK,
-        refresh_token: crypto.randomUUID(),
+        refresh_token: newRefreshToken(),
       })
       setData(response)
     } catch (err) {
