@@ -53,6 +53,8 @@ class RecommendRequest(BaseModel):
     top_k: int = Field(default=20, ge=1, le=100)
     # Client nonce so each Refresh click reshuffles random retrieval buckets.
     refresh_token: str | None = Field(default=None, max_length=128)
+    # Recently shown movie ids from this browser session (merged into OpenSearch excludes).
+    exclude_movie_ids: list[int] = Field(default_factory=list, max_length=60)
 
 
 class RecommendationItem(BaseModel):

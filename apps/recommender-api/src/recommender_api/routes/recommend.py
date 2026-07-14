@@ -48,6 +48,7 @@ def create_recommend_router(runtime: InferenceRuntime, settings: RecommenderApiS
                     new_ratings=request_body.ratings,
                     top_k=top_k,
                     refresh_token=request_body.refresh_token,
+                    exclude_movie_ids=request_body.exclude_movie_ids,
                 )
             session.commit()
             runtime.metrics.record_request("recommend", "success")

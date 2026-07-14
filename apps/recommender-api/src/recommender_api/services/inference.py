@@ -30,6 +30,45 @@ class RecommendValidationError(ValueError):
     """Raised when a recommend request fails business validation."""
 
 
+# Cap client-supplied recently-shown IDs before merging into OpenSearch excludes.
+_MAX_CLIENT_EXCLUDE_MOVIE_IDS = 60
+
+
+def merge_retrieval_exclude_ids(
+    rated_movie_ids: set[int],
+    client_exclude_movie_ids: list[int] | None = None,
+    *,
+    max_client_ids: int = _MAX_CLIENT_EXCLUDE_MOVIE_IDS,
+) -> set[int]:
+    """
+    Build the OpenSearch exclude set from ratings plus a capped client window.
+
+    Do this by:
+    1. Deduplicating client IDs while preserving first-seen order.
+    2. Keeping at most max_client_ids from that list (oldest first when the client
+       sends oldest→newest).
+    3. Unioning with already-rated movie ids.
+
+    ============================ Arguments ============================
+    rated_movie_ids: Movie ids already in the user's rating history / request.
+    client_exclude_movie_ids: Recently shown ids from the browser session.
+    max_client_ids: Hard cap on how many client ids to honor.
+
+    ============================ Returns ============================
+    Combined exclude set for retrieve_candidate_pool.
+    """
+    capped: list[int] = []
+    seen: set[int] = set()
+    for movie_id in client_exclude_movie_ids or []:
+        if movie_id in seen:
+            continue
+        seen.add(movie_id)
+        capped.append(movie_id)
+        if len(capped) >= max_client_ids:
+            break
+    return set(rated_movie_ids) | set(capped)
+
+
 def _score_candidates(
     *,
     runtime: InferenceRuntime,
@@ -83,7 +122,8 @@ def _score_candidates(
 def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: int, \
                             new_ratings: list[RatingInput], top_k: int, \
                                 kafka_producer_flush: bool = True,
-                                refresh_token: str | None = None) -> RecommendResponse:
+                                refresh_token: str | None = None,
+                                exclude_movie_ids: list[int] | None = None) -> RecommendResponse:
     """
     Run the full online recommendation pipeline for one authenticated user.
 
@@ -102,6 +142,7 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
     top_k: Number of recommendations to return.
     kafka_producer_flush: Whether to flush Kafka after publishing ratings.
     refresh_token: Optional client nonce to reshuffle random exploration buckets.
+    exclude_movie_ids: Recently shown movie ids from the client session.
 
     ============================ Returns ============================
     Ranked recommendations and request metadata.
@@ -141,7 +182,10 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
             metrics=runtime.metrics,
         )
 
-        exclude_movie_ids = set(merged_ratings.keys())
+        exclude_movie_ids = merge_retrieval_exclude_ids(
+            set(merged_ratings.keys()),
+            exclude_movie_ids,
+        )
         with runtime.metrics.time_postgres("movie_genres"):
             movie_genres = get_movie_genres_by_ids(session, list(merged_ratings.keys()))
         liked_genres = derive_liked_genres(
