@@ -36,4 +36,40 @@
   .text-gradient {
     @apply bg-gradient-to-r from-rose-300 via-purple-300 to-cyan-300 bg-clip-text text-transparent;
   }
+
+  /* Horizontal/vertical scrollbars that match glass panels */
+  .scrollbar-themed {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(168 85 247 / 0.45) rgb(15 23 42 / 0.55);
+  }
+
+  .scrollbar-themed::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+
+  .scrollbar-themed::-webkit-scrollbar-track {
+    background: rgb(15 23 42 / 0.55);
+    border-radius: 9999px;
+  }
+
+  .scrollbar-themed::-webkit-scrollbar-thumb {
+    background: linear-gradient(
+      90deg,
+      rgb(244 63 94 / 0.45),
+      rgb(168 85 247 / 0.55),
+      rgb(139 92 246 / 0.55)
+    );
+    border-radius: 9999px;
+    border: 1px solid rgb(255 255 255 / 0.08);
+  }
+
+  .scrollbar-themed::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(
+      90deg,
+      rgb(244 63 94 / 0.65),
+      rgb(168 85 247 / 0.75),
+      rgb(139 92 246 / 0.75)
+    );
+  }
 }

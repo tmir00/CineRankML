@@ -62,7 +62,7 @@ export function UserRatingsCarousel({
       ) : null}
 
       {!loading && ratings.length > 0 ? (
-        <div className="grid auto-cols-[180px] grid-flow-col gap-4 overflow-x-auto pb-2">
+        <div className="scrollbar-themed grid auto-cols-[180px] grid-flow-col gap-4 overflow-x-auto pb-2">
           {ratings.map((item) => (
             <div key={item.movie_id} className="h-full min-h-0">
               <MovieCard
