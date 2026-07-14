@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import numpy as np
 
-from common.opensearch.retrieval import RetrievalSettings, merge_candidates, retrieve_candidate_pool
+from common.opensearch.retrieval import (
+    RetrievalSettings,
+    merge_candidates,
+    retrieve_candidate_pool,
+    stable_retrieval_seed,
+)
 from common.opensearch.search import (
     RETRIEVAL_SOURCE_KNN,
     RETRIEVAL_SOURCE_POPULAR,
@@ -35,6 +41,24 @@ def _doc(movie_id: int, source: str) -> CandidateMovieDoc:
         content_embedding=_EMBEDDING,
         retrieval_source=source,
     )
+
+
+def test_stable_retrieval_seed_is_stable_without_refresh_token() -> None:
+    when = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+    first = stable_retrieval_seed(42, when=when)
+    second = stable_retrieval_seed(42, when=when, refresh_token=None)
+    third = stable_retrieval_seed(42, when=when, refresh_token="")
+    assert first == second == third
+
+
+def test_stable_retrieval_seed_changes_with_refresh_token() -> None:
+    when = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+    daily = stable_retrieval_seed(42, when=when)
+    refreshed_a = stable_retrieval_seed(42, when=when, refresh_token="token-a")
+    refreshed_b = stable_retrieval_seed(42, when=when, refresh_token="token-b")
+    assert refreshed_a != daily
+    assert refreshed_b != daily
+    assert refreshed_a != refreshed_b
 
 
 def test_merge_candidates_prefers_knn_over_popular() -> None:

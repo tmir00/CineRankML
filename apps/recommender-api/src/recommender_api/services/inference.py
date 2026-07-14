@@ -82,7 +82,8 @@ def _score_candidates(
 
 def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: int, \
                             new_ratings: list[RatingInput], top_k: int, \
-                                kafka_producer_flush: bool = True) -> RecommendResponse:
+                                kafka_producer_flush: bool = True,
+                                refresh_token: str | None = None) -> RecommendResponse:
     """
     Run the full online recommendation pipeline for one authenticated user.
 
@@ -100,6 +101,7 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
     new_ratings: Inline ratings from the request body.
     top_k: Number of recommendations to return.
     kafka_producer_flush: Whether to flush Kafka after publishing ratings.
+    refresh_token: Optional client nonce to reshuffle random exploration buckets.
 
     ============================ Returns ============================
     Ranked recommendations and request metadata.
@@ -156,6 +158,7 @@ def run_recommendation(*, runtime: InferenceRuntime, session: Session, user_id: 
                 exclude_movie_ids=exclude_movie_ids,
                 user_id=user_id,
                 settings=runtime.retrieval,
+                refresh_token=refresh_token,
             )
 
         runtime.metrics.observe_candidates_retrieved(len(candidates))

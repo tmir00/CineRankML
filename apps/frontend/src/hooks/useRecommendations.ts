@@ -13,7 +13,11 @@ export function useRecommendations() {
     setError(null)
     setTopK(requestedTopK)
     try {
-      const response = await getRecommendations({ ratings: [], top_k: requestedTopK })
+      const response = await getRecommendations({
+        ratings: [],
+        top_k: requestedTopK,
+        refresh_token: crypto.randomUUID(),
+      })
       setData(response)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load recommendations')

@@ -49,24 +49,36 @@ class RetrievalSettings:
     min_vote_average: float = 6.0
 
 
-def stable_retrieval_seed(user_id: int, when: datetime | None = None) -> int:
+def stable_retrieval_seed(
+    user_id: int,
+    when: datetime | None = None,
+    *,
+    refresh_token: str | None = None,
+) -> int:
     """
-    Build a stable random seed for one user on one UTC day.
+    Build a random seed for one user on one UTC day, optionally varying per refresh.
 
     Do this by:
     1. Formatting user_id and the UTC calendar date into a short string.
-    2. Hashing that string with adler32 so OpenSearch random_score stays stable for the day.
+    2. Appending refresh_token when the client asks for a reshuffled slate.
+    3. Hashing that string with adler32 for OpenSearch random_score / numpy sampling.
 
     ============================ Arguments ============================
     user_id: Authenticated app user id.
     when: Optional timestamp; defaults to now in UTC.
+    refresh_token: Optional client nonce so each refresh gets a different seed.
+        Empty strings are treated the same as omitting the token.
 
     ============================ Returns ============================
     Positive integer seed for random_score and numpy sampling.
     """
     moment = when or datetime.now(tz=UTC)
     day = moment.astimezone(UTC).date().isoformat()
-    raw = f"{user_id}:{day}".encode()
+    token = (refresh_token or "").strip()
+    if token:
+        raw = f"{user_id}:{day}:{token}".encode()
+    else:
+        raw = f"{user_id}:{day}".encode()
     return int(zlib.adler32(raw) & 0x7FFFFFFF)
 
 
@@ -191,6 +203,8 @@ def retrieve_candidate_pool(
     exclude_movie_ids: set[int],
     user_id: int,
     settings: RetrievalSettings,
+    *,
+    refresh_token: str | None = None,
 ) -> list[CandidateMovieDoc]:
     """
     Retrieve and merge candidates from all active OpenSearch buckets.
@@ -208,11 +222,12 @@ def retrieve_candidate_pool(
     exclude_movie_ids: Rated movie ids to filter out of every bucket.
     user_id: Authenticated user id used for stable daily random seeds.
     settings: Bucket sizes and quality thresholds.
+    refresh_token: Optional client nonce to reshuffle random exploration buckets.
 
     ============================ Returns ============================
     Deduplicated candidate movies ready for feature matrix construction.
     """
-    random_seed = stable_retrieval_seed(user_id)
+    random_seed = stable_retrieval_seed(user_id, refresh_token=refresh_token)
 
     if liked_genres:
         knn_bucket, popular_bucket, random_bucket = _msearch_retrieval_buckets(

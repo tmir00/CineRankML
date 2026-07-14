@@ -51,6 +51,8 @@ class RecommendRequest(BaseModel):
 
     ratings: list[RatingInput] = Field(default_factory=list)
     top_k: int = Field(default=20, ge=1, le=100)
+    # Client nonce so each Refresh click reshuffles random retrieval buckets.
+    refresh_token: str | None = Field(default=None, max_length=128)
 
 
 class RecommendationItem(BaseModel):
